@@ -111,47 +111,47 @@
   <main>
     <header>
       <section>
-        <h1>Ship Counterspell as a small Rust CLI.</h1>
-        <p class="lede">The work is done when <code>counterspell watch</code> records the current Codex session and cwd, and <code>counterspell status</code> shows watched sessions mapped to Herdr panes by running <code>herdr pane list</code> and matching cwd.</p>
+        <h1>Ship Counterspell as an opt-in session watcher.</h1>
+        <p class="lede">The work is done when <code>counterspell status</code> enumerates recent Claude transcript sessions across project dirs, maps them to Herdr panes by cwd, shows unmapped and live pane-only rows, and <code>counterspell watch</code> only plans compact-then-switch actions for explicitly configured targets.</p>
       </section>
       <aside class="panel">
         <h2>Chosen Design</h2>
-        <p><span class="accent">Rust binary, global state file, Herdr as an external command.</span> The CLI owns durable watch state; Herdr remains the live pane source of truth.</p>
+        <p><span class="accent">Rust binary, transcript discovery, TOML targets, Herdr as an external command.</span> Claude JSONLs are the session source; Herdr remains the live pane source of truth; config is the only authority for remediation.</p>
       </aside>
     </header>
 
     <section class="grid" aria-label="execution contract">
       <article class="cell">
         <h2>Standards</h2>
-        <p>Small public surface, path-normalized cwd matching, no hidden repo state, clear text output.</p>
+        <p>Strict opt-in defaults, path-normalized cwd matching, no hidden repo state, human-readable status output.</p>
       </article>
       <article class="cell">
         <h2>Acceptance</h2>
-        <p><code>counterspell watch</code> and <code>counterspell status</code> run locally after install.</p>
+        <p>Tests cover drift detection, unattended gating, compact-then-switch sequencing, config parsing, discovery, unmapped sessions, live pane-only rows, ignored-without-target behavior, and persisted debounce state.</p>
       </article>
       <article class="cell">
         <h2>Verification</h2>
-        <p>CLI integration tests plus live command transcripts against the current Herdr pane list.</p>
+        <p>Repo gate, local install, live <code>counterspell status</code>, live <code>counterspell watch</code>, and a fresh diff critic.</p>
       </article>
       <article class="cell">
         <h2>Stop If</h2>
-        <p>Herdr JSON shape contradicts the addendum, or no session/cwd can be determined.</p>
+        <p>Herdr JSON shape contradicts the addendum, transcript parsing cannot recover session ids, or any untargeted session can arm actions.</p>
       </article>
       <article class="cell wide">
         <h2>Implementation</h2>
         <ul>
-          <li>Document the command contract.</li>
-          <li>Add failing integration tests for watch/status and cwd matching.</li>
-          <li>Implement state load/save, session detection, Herdr parsing, and table rendering.</li>
-          <li>Install locally and run the real commands.</li>
+          <li>Document strict opt-in config and command behavior.</li>
+          <li>Add unit tests for transcript drift, gate blockers, remediation sequencing, config parsing, and opt-in arming.</li>
+          <li>Add CLI tests for all-project discovery, cwd mapping, unmapped sessions, live pane-only rows, and ignored drift.</li>
+          <li>Install locally and run the real commands against current Herdr panes.</li>
         </ul>
       </article>
       <article class="cell wide">
         <h2>Quality System</h2>
         <ul>
           <li>Gate: <code>cargo fmt -- --check && cargo test && cargo clippy --all-targets -- -D warnings</code>.</li>
-          <li>Fresh critic must check that Herdr failures are not hidden and session ids are not invented.</li>
-          <li>Residual risk to report: exact full brief was not present in the checkout; addendum is treated as source of truth.</li>
+          <li>Fresh critic must check strict opt-in behavior, discovery completeness, status clarity, and test coverage against the lane card.</li>
+          <li>Residual risk to report: live session inventory is time-sensitive and reflects the machine state at verification time.</li>
         </ul>
       </article>
     </section>
