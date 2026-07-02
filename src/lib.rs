@@ -22,6 +22,7 @@ const COMPACT_COMMAND: &str = "/compact Plain handoff: summarize the current goa
 #[derive(Debug, Parser)]
 #[command(name = "counterspell")]
 #[command(about = "Watch Claude sessions and map them to Herdr panes.")]
+#[command(version)]
 #[command(arg_required_else_help = true)]
 pub struct Cli {
     /// Annotate watched Herdr panes with Counterspell metadata and exit.
