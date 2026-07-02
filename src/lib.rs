@@ -16,11 +16,18 @@ const STORE_VERSION: u8 = 2;
 const DEFAULT_RECENT_HOURS: u64 = 72;
 const DEFAULT_TRANSCRIPT_QUIET_SECONDS: u64 = 30;
 const DEFAULT_DEBOUNCE_SECONDS: u64 = 300;
+const COMPACT_WAIT_TIMEOUT_MS: u64 = 180_000;
+const COMPACT_COMMAND: &str = "/compact Plain handoff: summarize the current goal, repo/session state, exact next action, and any risks. Keep it factual and compact.";
 
 #[derive(Debug, Parser)]
 #[command(name = "counterspell")]
 #[command(about = "Watch Claude sessions and map them to Herdr panes.")]
+#[command(arg_required_else_help = true)]
 pub struct Cli {
+    /// Annotate watched Herdr panes with Counterspell metadata and exit.
+    #[arg(long)]
+    annotate_herdr: bool,
+
     #[arg(long, global = true, value_name = "PATH")]
     state: Option<PathBuf>,
 
@@ -34,15 +41,40 @@ pub struct Cli {
     recent_hours: Option<u64>,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Create an opt-in config file.
+    Init(InitArgs),
     /// Run one detection/gating pass over recent Claude sessions.
     Watch(WatchArgs),
     /// Show recent Claude sessions and their matching Herdr panes.
-    Status,
+    Status(StatusArgs),
+}
+
+#[derive(Debug, Args)]
+struct InitArgs {
+    /// Overwrite an existing config file.
+    #[arg(long)]
+    force: bool,
+
+    /// Target exactly this transcript session id.
+    #[arg(long, value_name = "SESSION_ID")]
+    session_id: Option<String>,
+
+    /// Target transcript project directory labels, supports `*`.
+    #[arg(long, value_name = "PATTERN")]
+    project_pattern: Option<String>,
+
+    /// Target session cwd values, supports `*`.
+    #[arg(long, value_name = "PATTERN")]
+    cwd_pattern: Option<String>,
+
+    /// Required when a selector is provided.
+    #[arg(long, value_name = "MODEL")]
+    target_model: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -50,6 +82,13 @@ struct WatchArgs {
     /// Arm eligible compact/switch actions. Without this, watch is a dry-run.
     #[arg(long)]
     arm: bool,
+}
+
+#[derive(Debug, Args)]
+struct StatusArgs {
+    /// Emit machine-readable JSON for indicator plugins and scripts.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -138,7 +177,7 @@ struct TranscriptSession {
     model_history: Vec<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct StatusRow {
     session_id: String,
     project: String,
@@ -153,7 +192,7 @@ struct StatusRow {
     updated: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct WatchRow {
     session_id: String,
     pane: String,
@@ -161,6 +200,23 @@ struct WatchRow {
     target: String,
     gate: String,
     actions: String,
+}
+
+#[derive(Debug, Serialize)]
+struct StatusOutput<'a> {
+    summary: StatusSummary,
+    rows: &'a [StatusRow],
+}
+
+#[derive(Debug, Serialize)]
+struct StatusSummary {
+    total: usize,
+    watched: usize,
+    ignored: usize,
+    mapped: usize,
+    live_panes: usize,
+    last_trigger_event: Option<String>,
+    last_trigger_unix: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,10 +256,41 @@ pub fn run_from_args() -> Result<()> {
 }
 
 pub fn run(cli: Cli) -> Result<()> {
-    match &cli.command {
-        Commands::Watch(args) => watch(&cli, args),
-        Commands::Status => status(&cli),
+    if cli.annotate_herdr {
+        return annotate_herdr(&cli);
     }
+
+    match &cli.command {
+        Some(Commands::Init(args)) => init(&cli, args),
+        Some(Commands::Watch(args)) => watch(&cli, args),
+        Some(Commands::Status(args)) => status(&cli, args),
+        None => bail!("missing command; run `counterspell --help`"),
+    }
+}
+
+fn init(cli: &Cli, args: &InitArgs) -> Result<()> {
+    let home = home_dir()?;
+    let path = config_path(cli.config.clone(), &home);
+    if path.exists() && !args.force {
+        bail!(
+            "{} already exists; pass --force to replace it",
+            path.display()
+        );
+    }
+
+    let config = initial_config(args)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create config dir {}", parent.display()))?;
+    }
+    fs::write(&path, config).with_context(|| format!("write config {}", path.display()))?;
+    println!("wrote {}", path.display());
+    if args.target_model.is_none() {
+        println!(
+            "no targets configured; add [[targets]] before `counterspell watch --arm` can act"
+        );
+    }
+    Ok(())
 }
 
 fn watch(cli: &Cli, args: &WatchArgs) -> Result<()> {
@@ -219,7 +306,7 @@ fn watch(cli: &Cli, args: &WatchArgs) -> Result<()> {
     }
 
     let panes = load_herdr_panes().context("load Herdr panes for watch")?;
-    let (rows, store_changed) = watch_rows(&sessions, &panes, &mut store, &config, now, args.arm);
+    let (rows, store_changed) = watch_rows(&sessions, &panes, &mut store, &config, now, args.arm)?;
     if store_changed {
         save_store(&state_path, &store)?;
     }
@@ -227,21 +314,120 @@ fn watch(cli: &Cli, args: &WatchArgs) -> Result<()> {
     Ok(())
 }
 
-fn status(cli: &Cli) -> Result<()> {
+fn status(cli: &Cli, args: &StatusArgs) -> Result<()> {
     let config = load_config(cli)?;
     let now = Utc::now();
     let store = load_store(&state_path(cli.state.clone())?)?;
     let sessions = discover_recent_sessions(&config, now)?;
-
-    if sessions.is_empty() {
-        println!("no recent sessions");
-        return Ok(());
-    }
-
     let panes = load_herdr_panes().context("load Herdr panes for session status")?;
     let rows = status_rows(&sessions, &panes, &store, &config, now);
-    print_status(&rows);
+    if args.json {
+        print_status_json(&rows, &store, now)?;
+    } else if rows.is_empty() {
+        println!("no recent sessions");
+    } else {
+        print_status(&rows);
+    }
     Ok(())
+}
+
+fn annotate_herdr(cli: &Cli) -> Result<()> {
+    let config = load_config(cli)?;
+    let now = Utc::now();
+    let sessions = discover_recent_sessions(&config, now)?;
+    let panes = load_herdr_panes().context("load Herdr panes for annotation")?;
+    let mut annotated = 0usize;
+
+    for session in &sessions {
+        let Some(target) = target_for_session(session, &config) else {
+            continue;
+        };
+        let matching_panes = session
+            .cwd
+            .as_deref()
+            .map(|cwd| matching_panes_for_cwd(cwd, &panes))
+            .unwrap_or_default();
+        let title = format!("Counterspell: {}", target.target_model);
+        let status = detect_drift(session, &target.target_model)
+            .map(|drift| format!("drift {}->{}", drift.from, drift.to))
+            .unwrap_or_else(|| "watched".to_string());
+
+        for pane in matching_panes {
+            annotate_herdr_pane(pane_id(pane), &title, &status)?;
+            annotated += 1;
+        }
+    }
+
+    println!("annotated {annotated} Herdr pane(s)");
+    Ok(())
+}
+
+fn annotate_herdr_pane(pane_id: &str, title: &str, status: &str) -> Result<()> {
+    run_herdr_args(&[
+        "pane",
+        "report-metadata",
+        pane_id,
+        "--source",
+        "counterspell",
+        "--title",
+        title,
+        "--custom-status",
+        status,
+        "--ttl-ms",
+        "300000",
+    ])
+    .with_context(|| format!("annotate Herdr pane {pane_id}"))?;
+    Ok(())
+}
+
+fn initial_config(args: &InitArgs) -> Result<String> {
+    let selector_count = [
+        args.session_id.is_some(),
+        args.project_pattern.is_some(),
+        args.cwd_pattern.is_some(),
+    ]
+    .into_iter()
+    .filter(|selected| *selected)
+    .count();
+
+    if args.target_model.is_some() && selector_count != 1 {
+        bail!("set exactly one of --session-id, --project-pattern, or --cwd-pattern with --target-model");
+    }
+    if args.target_model.is_none() && selector_count != 0 {
+        bail!("--target-model is required when a target selector is provided");
+    }
+
+    let mut config = format!(
+        "recent_hours = {DEFAULT_RECENT_HOURS}\ntranscript_quiet_seconds = {DEFAULT_TRANSCRIPT_QUIET_SECONDS}\ndebounce_seconds = {DEFAULT_DEBOUNCE_SECONDS}\n"
+    );
+
+    if let Some(target_model) = &args.target_model {
+        config.push_str("\n[[targets]]\n");
+        if let Some(session_id) = &args.session_id {
+            config.push_str(&format!("session_id = \"{}\"\n", escape_toml(session_id)));
+        }
+        if let Some(project_pattern) = &args.project_pattern {
+            config.push_str(&format!(
+                "project_pattern = \"{}\"\n",
+                escape_toml(project_pattern)
+            ));
+        }
+        if let Some(cwd_pattern) = &args.cwd_pattern {
+            config.push_str(&format!("cwd_pattern = \"{}\"\n", escape_toml(cwd_pattern)));
+        }
+        config.push_str(&format!(
+            "target_model = \"{}\"\n",
+            escape_toml(target_model)
+        ));
+    } else {
+        config.push_str("\n# Counterspell is opt-in. Add explicit [[targets]] before arming.\n");
+    }
+
+    Ok(config)
+}
+
+fn escape_toml(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn load_config(cli: &Cli) -> Result<Config> {
@@ -369,6 +555,10 @@ fn discover_recent_sessions(config: &Config, now: DateTime<Utc>) -> Result<Vec<T
     let cutoff = now - Duration::hours(config.recent_hours as i64);
     let mut sessions = Vec::new();
 
+    if !config.projects_dir.exists() {
+        return Ok(sessions);
+    }
+
     for project_entry in fs::read_dir(&config.projects_dir)
         .with_context(|| format!("read projects dir {}", config.projects_dir.display()))?
     {
@@ -494,22 +684,33 @@ fn project_label(path: &Path) -> String {
 }
 
 fn load_herdr_panes() -> Result<Vec<HerdrPane>> {
+    let output = run_herdr_args(&["pane", "list"])?;
+    parse_herdr_panes(&output.stdout)
+}
+
+fn run_herdr_args(args: &[&str]) -> Result<std::process::Output> {
     let herdr_bin =
         env::var_os("COUNTERSPELL_HERDR_BIN").unwrap_or_else(|| OsString::from("herdr"));
     let output = ProcessCommand::new(&herdr_bin)
-        .args(["pane", "list"])
+        .args(args)
         .output()
-        .with_context(|| format!("run {}", PathBuf::from(&herdr_bin).display()))?;
+        .with_context(|| {
+            format!(
+                "run {}; Herdr must be installed and running for pane discovery/injection",
+                PathBuf::from(&herdr_bin).display()
+            )
+        })?;
 
     if !output.status.success() {
         bail!(
-            "{} exited with {}",
+            "{} {:?} exited with {}; Herdr must be running and reachable",
             PathBuf::from(&herdr_bin).display(),
+            args,
             output.status
         );
     }
 
-    parse_herdr_panes(&output.stdout)
+    Ok(output)
 }
 
 fn parse_herdr_panes(bytes: &[u8]) -> Result<Vec<HerdrPane>> {
@@ -621,53 +822,82 @@ fn watch_rows(
     config: &Config,
     now: DateTime<Utc>,
     arm: bool,
-) -> (Vec<WatchRow>, bool) {
+) -> Result<(Vec<WatchRow>, bool)> {
     let mut store_changed = false;
-    let rows = sessions
-        .iter()
-        .map(|session| {
-            let matching_panes = session
-                .cwd
-                .as_deref()
-                .map(|cwd| matching_panes_for_cwd(cwd, panes))
-                .unwrap_or_default();
-            let state = store.sessions.get(&session.session_id);
-            let plan =
-                remediation_plan(session, matching_panes.first().copied(), state, config, now);
-            if arm && !plan.actions.is_empty() {
-                store.sessions.insert(
-                    session.session_id.clone(),
-                    SessionState {
-                        session_id: session.session_id.clone(),
-                        cwd: session.cwd.clone(),
-                        last_action_unix: Some(now.timestamp().try_into().unwrap_or(0)),
-                    },
-                );
-                store_changed = true;
-            }
-            let target = target_for_session(session, config);
-            WatchRow {
-                session_id: short_session(&session.session_id),
-                pane: if matching_panes.is_empty() {
-                    "not-open".to_string()
-                } else {
-                    join_or_dash(matching_panes.iter().map(|pane| pane_id(pane)))
-                },
-                model: session
-                    .latest_model
-                    .clone()
-                    .unwrap_or_else(|| "-".to_string()),
-                target: target
-                    .as_ref()
-                    .map(format_target_match)
-                    .unwrap_or_else(|| "ignored:no-target".to_string()),
-                gate: describe_gate(&plan.gate),
-                actions: describe_watch_actions(&plan.actions, arm),
-            }
-        })
-        .collect();
+    let mut rows = Vec::new();
 
-    (rows, store_changed)
+    for session in sessions {
+        let matching_panes = session
+            .cwd
+            .as_deref()
+            .map(|cwd| matching_panes_for_cwd(cwd, panes))
+            .unwrap_or_default();
+        let state = store.sessions.get(&session.session_id);
+        let pane = matching_panes.first().copied();
+        let plan = remediation_plan(session, pane, state, config, now);
+        if arm && !plan.actions.is_empty() {
+            let pane = pane.context("eligible remediation plan had no Herdr pane")?;
+            execute_remediation(pane_id(pane), &plan.actions)?;
+            store.sessions.insert(
+                session.session_id.clone(),
+                SessionState {
+                    session_id: session.session_id.clone(),
+                    cwd: session.cwd.clone(),
+                    last_action_unix: Some(now.timestamp().try_into().unwrap_or(0)),
+                },
+            );
+            store_changed = true;
+        }
+        let target = target_for_session(session, config);
+        rows.push(WatchRow {
+            session_id: short_session(&session.session_id),
+            pane: if matching_panes.is_empty() {
+                "not-open".to_string()
+            } else {
+                join_or_dash(matching_panes.iter().map(|pane| pane_id(pane)))
+            },
+            model: session
+                .latest_model
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
+            target: target
+                .as_ref()
+                .map(format_target_match)
+                .unwrap_or_else(|| "ignored:no-target".to_string()),
+            gate: describe_gate(&plan.gate),
+            actions: describe_watch_actions(&plan.actions, arm),
+        });
+    }
+
+    Ok((rows, store_changed))
+}
+
+fn execute_remediation(pane_id: &str, actions: &[PlannedAction]) -> Result<()> {
+    for action in actions {
+        match action {
+            PlannedAction::Compact => {
+                run_herdr_args(&["pane", "run", pane_id, COMPACT_COMMAND])
+                    .with_context(|| format!("send compact command to Herdr pane {pane_id}"))?;
+                run_herdr_args(&[
+                    "wait",
+                    "agent-status",
+                    pane_id,
+                    "--status",
+                    "idle",
+                    "--timeout",
+                    &COMPACT_WAIT_TIMEOUT_MS.to_string(),
+                ])
+                .with_context(|| format!("wait for compact to finish in Herdr pane {pane_id}"))?;
+            }
+            PlannedAction::SwitchModel(model) => {
+                let command = format!("/model {model}");
+                run_herdr_args(&["pane", "run", pane_id, command.as_str()])
+                    .with_context(|| format!("send model switch to Herdr pane {pane_id}"))?;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -993,6 +1223,34 @@ fn print_status(rows: &[StatusRow]) {
             &widths,
         );
     }
+}
+
+fn print_status_json(rows: &[StatusRow], store: &WatchStore, now: DateTime<Utc>) -> Result<()> {
+    let last_trigger_unix = store
+        .sessions
+        .values()
+        .filter_map(|session| session.last_action_unix)
+        .max();
+    let summary = StatusSummary {
+        total: rows.len(),
+        watched: rows.iter().filter(|row| row.watch == "watched").count(),
+        ignored: rows.iter().filter(|row| row.watch == "ignored").count(),
+        mapped: rows
+            .iter()
+            .filter(|row| row.pane != "not-open" && !row.session_id.starts_with("pane:"))
+            .count(),
+        live_panes: rows
+            .iter()
+            .filter(|row| row.project == "herdr-live-pane")
+            .count(),
+        last_trigger_event: last_trigger_unix
+            .and_then(unix_to_utc)
+            .map(|timestamp| human_age(timestamp, now)),
+        last_trigger_unix,
+    };
+    let output = StatusOutput { summary, rows };
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
 }
 
 fn print_watch(rows: &[WatchRow]) {

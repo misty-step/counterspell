@@ -172,6 +172,7 @@ fn status_is_empty_when_no_recent_sessions_exist() {
     let projects = temp.path().join("projects");
     let state = temp.path().join("state.json");
     fs::create_dir_all(&projects).expect("projects");
+    let (fake_herdr, fixture) = fake_herdr(temp.path(), &[]);
 
     Command::cargo_bin("counterspell")
         .expect("binary")
@@ -180,10 +181,111 @@ fn status_is_empty_when_no_recent_sessions_exist() {
         .arg("--state")
         .arg(&state)
         .arg("status")
-        .env("COUNTERSPELL_HERDR_BIN", "/definitely/not/herdr")
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
         .assert()
         .success()
         .stdout(predicate::str::contains("no recent sessions"));
+}
+
+#[test]
+fn status_tolerates_missing_projects_dir() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("missing-projects");
+    let state = temp.path().join("state.json");
+    let (fake_herdr, fixture) = fake_herdr(temp.path(), &[]);
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--state")
+        .arg(&state)
+        .arg("status")
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no recent sessions"));
+}
+
+#[test]
+fn status_json_reports_summary_for_indicator_plugins() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let cwd = temp.path().join("repo");
+    fs::create_dir_all(&cwd).expect("cwd");
+    write_transcript(
+        &projects,
+        "-Users-phaedrus-Development-adminifi",
+        "adminifi-session",
+        &cwd,
+        "claude-fable-5",
+    );
+    let config = write_config(
+        temp.path(),
+        r#"
+[[targets]]
+session_id = "adminifi-session"
+target_model = "claude-fable-5"
+"#,
+    );
+    let state = temp.path().join("state.json");
+    fs::write(
+        &state,
+        r#"{"version":2,"sessions":{"adminifi-session":{"session_id":"adminifi-session","cwd":"/repo","last_action_unix":1783018006}}}"#,
+    )
+    .expect("state");
+    let (fake_herdr, fixture) = fake_herdr(
+        temp.path(),
+        &[("w13:p1", &cwd, "claude", "idle", "adminifi")],
+    );
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("--recent-hours")
+        .arg("999")
+        .arg("status")
+        .arg("--json")
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(r#""summary""#))
+        .stdout(predicate::str::contains(r#""watched": 1"#))
+        .stdout(predicate::str::contains(
+            r#""last_trigger_unix": 1783018006"#,
+        ));
+}
+
+#[test]
+fn init_writes_explicit_opt_in_config() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config = temp.path().join("config.toml");
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--config")
+        .arg(&config)
+        .arg("init")
+        .arg("--cwd-pattern")
+        .arg("/repo/*")
+        .arg("--target-model")
+        .arg("claude-fable-5")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("wrote"));
+
+    let config_text = fs::read_to_string(config).expect("config");
+    assert!(config_text.contains("[[targets]]"));
+    assert!(config_text.contains("cwd_pattern = \"/repo/*\""));
+    assert!(config_text.contains("target_model = \"claude-fable-5\""));
 }
 
 #[test]
@@ -388,6 +490,114 @@ target_model = "claude-fable-5"
 }
 
 #[test]
+fn watch_arm_injects_compact_then_wait_then_model_switch() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let cwd = temp.path().join("repo");
+    let state = temp.path().join("counterspell-state.json");
+    let herdr_log = temp.path().join("herdr.log");
+    fs::create_dir_all(&cwd).expect("cwd");
+    write_transcript_with_models(
+        &projects,
+        "-Users-phaedrus-Development-adminifi",
+        "adminifi-session",
+        &cwd,
+        &["claude-fable-5", "claude-opus-4-8"],
+    );
+    let config = write_config(
+        temp.path(),
+        r#"
+[[targets]]
+session_id = "adminifi-session"
+target_model = "claude-fable-5"
+"#,
+    );
+    let (fake_herdr, fixture) = fake_herdr(
+        temp.path(),
+        &[("w13:p1", &cwd, "claude", "idle", "adminifi")],
+    );
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("--recent-hours")
+        .arg("999")
+        .arg("watch")
+        .arg("--arm")
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .env("COUNTERSPELL_HERDR_LOG", &herdr_log)
+        .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "compact then switch:claude-fable-5",
+        ));
+
+    let log = fs::read_to_string(herdr_log).expect("herdr log");
+    let compact = log.find("pane run w13:p1 /compact").expect("compact");
+    let wait = log.find("wait agent-status w13:p1").expect("wait");
+    let model = log
+        .find("pane run w13:p1 /model claude-fable-5")
+        .expect("model");
+    assert!(compact < wait);
+    assert!(wait < model);
+}
+
+#[test]
+fn annotate_herdr_labels_watched_panes() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let cwd = temp.path().join("repo");
+    let herdr_log = temp.path().join("herdr.log");
+    fs::create_dir_all(&cwd).expect("cwd");
+    write_transcript(
+        &projects,
+        "-Users-phaedrus-Development-adminifi",
+        "adminifi-session",
+        &cwd,
+        "claude-fable-5",
+    );
+    let config = write_config(
+        temp.path(),
+        r#"
+[[targets]]
+session_id = "adminifi-session"
+target_model = "claude-fable-5"
+"#,
+    );
+    let (fake_herdr, fixture) = fake_herdr(
+        temp.path(),
+        &[("w13:p1", &cwd, "claude", "idle", "adminifi")],
+    );
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--annotate-herdr")
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .env("COUNTERSPELL_HERDR_LOG", &herdr_log)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("annotated 1 Herdr pane"));
+
+    let log = fs::read_to_string(herdr_log).expect("herdr log");
+    assert!(log.contains("pane report-metadata w13:p1"));
+    assert!(log.contains("--source counterspell"));
+    assert!(log.contains("--title Counterspell: claude-fable-5"));
+    assert!(log.contains("--custom-status watched"));
+}
+
+#[test]
 fn watch_without_arm_is_dry_run_and_does_not_persist_action_state() {
     let temp = tempfile::tempdir().expect("tempdir");
     let projects = temp.path().join("projects");
@@ -498,7 +708,16 @@ fn fake_herdr(temp_path: &Path, panes: &[(&str, &Path, &str, &str, &str)]) -> (P
     let fake_herdr = temp_path.join("fake-herdr");
     fs::write(
         &fake_herdr,
-        "#!/bin/sh\ncat \"$COUNTERSPELL_HERDR_FIXTURE\"\n",
+        r#"#!/bin/sh
+if [ "$1" = "pane" ] && [ "$2" = "list" ]; then
+  cat "$COUNTERSPELL_HERDR_FIXTURE"
+  exit 0
+fi
+if [ -n "$COUNTERSPELL_HERDR_LOG" ]; then
+  printf '%s\n' "$*" >> "$COUNTERSPELL_HERDR_LOG"
+fi
+exit 0
+"#,
     )
     .expect("fake herdr");
     chmod_exec(&fake_herdr);
