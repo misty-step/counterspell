@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Counterspell Watch/Status Plan</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #161616;
+      --muted: #5f6670;
+      --line: #d9dde3;
+      --wash: #f5f6f8;
+      --accent: #2554c7;
+    }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: #fff;
+    }
+    main {
+      width: min(1120px, calc(100% - 48px));
+      margin: 0 auto;
+      padding: 44px 0 72px;
+    }
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(260px, .8fr);
+      gap: 28px;
+      align-items: end;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 28px;
+    }
+    h1 {
+      font-size: clamp(34px, 5vw, 64px);
+      line-height: 0.98;
+      margin: 0 0 18px;
+      letter-spacing: 0;
+    }
+    h2 {
+      font-size: 13px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      margin: 0 0 10px;
+    }
+    p {
+      line-height: 1.55;
+      margin: 0;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .92em;
+      background: var(--wash);
+      padding: .1em .3em;
+    }
+    .lede {
+      max-width: 760px;
+      color: var(--muted);
+      font-size: 18px;
+    }
+    .panel {
+      border: 1px solid var(--line);
+      padding: 18px;
+      background: var(--wash);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      border: 1px solid var(--line);
+      border-top: 0;
+    }
+    .cell {
+      padding: 18px;
+      border-top: 1px solid var(--line);
+      min-width: 0;
+    }
+    .cell + .cell {
+      border-left: 1px solid var(--line);
+    }
+    .wide {
+      grid-column: span 2;
+    }
+    .accent {
+      color: var(--accent);
+      font-weight: 700;
+    }
+    ul {
+      margin: 0;
+      padding-left: 20px;
+      line-height: 1.55;
+    }
+    @media (max-width: 760px) {
+      main {
+        width: min(100% - 28px, 1120px);
+      }
+      header,
+      .grid {
+        grid-template-columns: 1fr;
+      }
+      .cell + .cell {
+        border-left: 0;
+      }
+      .wide {
+        grid-column: span 1;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <section>
+        <h1>Ship Counterspell as a small Rust CLI.</h1>
+        <p class="lede">The work is done when <code>counterspell watch</code> records the current Codex session and cwd, and <code>counterspell status</code> shows watched sessions mapped to Herdr panes by running <code>herdr pane list</code> and matching cwd.</p>
+      </section>
+      <aside class="panel">
+        <h2>Chosen Design</h2>
+        <p><span class="accent">Rust binary, global state file, Herdr as an external command.</span> The CLI owns durable watch state; Herdr remains the live pane source of truth.</p>
+      </aside>
+    </header>
+
+    <section class="grid" aria-label="execution contract">
+      <article class="cell">
+        <h2>Standards</h2>
+        <p>Small public surface, path-normalized cwd matching, no hidden repo state, clear text output.</p>
+      </article>
+      <article class="cell">
+        <h2>Acceptance</h2>
+        <p><code>counterspell watch</code> and <code>counterspell status</code> run locally after install.</p>
+      </article>
+      <article class="cell">
+        <h2>Verification</h2>
+        <p>CLI integration tests plus live command transcripts against the current Herdr pane list.</p>
+      </article>
+      <article class="cell">
+        <h2>Stop If</h2>
+        <p>Herdr JSON shape contradicts the addendum, or no session/cwd can be determined.</p>
+      </article>
+      <article class="cell wide">
+        <h2>Implementation</h2>
+        <ul>
+          <li>Document the command contract.</li>
+          <li>Add failing integration tests for watch/status and cwd matching.</li>
+          <li>Implement state load/save, session detection, Herdr parsing, and table rendering.</li>
+          <li>Install locally and run the real commands.</li>
+        </ul>
+      </article>
+      <article class="cell wide">
+        <h2>Quality System</h2>
+        <ul>
+          <li>Gate: <code>cargo fmt -- --check && cargo test && cargo clippy --all-targets -- -D warnings</code>.</li>
+          <li>Fresh critic must check that Herdr failures are not hidden and session ids are not invented.</li>
+          <li>Residual risk to report: exact full brief was not present in the checkout; addendum is treated as source of truth.</li>
+        </ul>
+      </article>
+    </section>
+  </main>
+</body>
+</html>
