@@ -260,6 +260,7 @@ target_model = "claude-fable-5"
         .arg("--recent-hours")
         .arg("999")
         .arg("watch")
+        .arg("--arm")
         .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
         .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
         .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
@@ -303,6 +304,7 @@ fn watch_ignores_drift_without_explicit_target() {
         .arg("--recent-hours")
         .arg("999")
         .arg("watch")
+        .arg("--arm")
         .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
         .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
         .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
@@ -350,6 +352,7 @@ target_model = "claude-fable-5"
         .arg("--recent-hours")
         .arg("999")
         .arg("watch")
+        .arg("--arm")
         .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
         .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
         .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
@@ -374,6 +377,7 @@ target_model = "claude-fable-5"
         .arg("--recent-hours")
         .arg("999")
         .arg("watch")
+        .arg("--arm")
         .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
         .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
         .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
@@ -381,6 +385,56 @@ target_model = "claude-fable-5"
         .success()
         .stdout(predicate::str::contains("debounce"))
         .stdout(predicate::str::contains("compact then switch").not());
+}
+
+#[test]
+fn watch_without_arm_is_dry_run_and_does_not_persist_action_state() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let cwd = temp.path().join("repo");
+    let state = temp.path().join("counterspell-state.json");
+    fs::create_dir_all(&cwd).expect("cwd");
+    write_transcript_with_models(
+        &projects,
+        "-Users-phaedrus-Development-adminifi",
+        "adminifi-session",
+        &cwd,
+        &["claude-fable-5", "claude-opus-4-8"],
+    );
+    let config = write_config(
+        temp.path(),
+        r#"
+[[targets]]
+session_id = "adminifi-session"
+target_model = "claude-fable-5"
+"#,
+    );
+    let (fake_herdr, fixture) = fake_herdr(
+        temp.path(),
+        &[("w13:p1", &cwd, "claude", "idle", "adminifi")],
+    );
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("--recent-hours")
+        .arg("999")
+        .arg("watch")
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "dry-run:compact then switch:claude-fable-5",
+        ));
+
+    assert!(!state.exists());
 }
 
 fn write_transcript(projects: &Path, project: &str, session_id: &str, cwd: &Path, model: &str) {

@@ -2,7 +2,7 @@
 name = "counterspell"
 version = "0.1.0"
 edition = "2021"
-description = "Watch Codex sessions and map them to Herdr panes."
+description = "Watch Claude transcript sessions and map opt-in targets to Herdr panes."
 license = "MIT"
 
 [dependencies]

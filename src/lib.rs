@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Duration, Utc};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -40,9 +40,16 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Run one detection/gating pass over recent Claude sessions.
-    Watch,
+    Watch(WatchArgs),
     /// Show recent Claude sessions and their matching Herdr panes.
     Status,
+}
+
+#[derive(Debug, Args)]
+struct WatchArgs {
+    /// Arm eligible compact/switch actions. Without this, watch is a dry-run.
+    #[arg(long)]
+    arm: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -193,13 +200,13 @@ pub fn run_from_args() -> Result<()> {
 }
 
 pub fn run(cli: Cli) -> Result<()> {
-    match cli.command {
-        Commands::Watch => watch(&cli),
+    match &cli.command {
+        Commands::Watch(args) => watch(&cli, args),
         Commands::Status => status(&cli),
     }
 }
 
-fn watch(cli: &Cli) -> Result<()> {
+fn watch(cli: &Cli, args: &WatchArgs) -> Result<()> {
     let config = load_config(cli)?;
     let now = Utc::now();
     let state_path = state_path(cli.state.clone())?;
@@ -212,7 +219,7 @@ fn watch(cli: &Cli) -> Result<()> {
     }
 
     let panes = load_herdr_panes().context("load Herdr panes for watch")?;
-    let (rows, store_changed) = watch_rows(&sessions, &panes, &mut store, &config, now);
+    let (rows, store_changed) = watch_rows(&sessions, &panes, &mut store, &config, now, args.arm);
     if store_changed {
         save_store(&state_path, &store)?;
     }
@@ -613,6 +620,7 @@ fn watch_rows(
     store: &mut WatchStore,
     config: &Config,
     now: DateTime<Utc>,
+    arm: bool,
 ) -> (Vec<WatchRow>, bool) {
     let mut store_changed = false;
     let rows = sessions
@@ -626,7 +634,7 @@ fn watch_rows(
             let state = store.sessions.get(&session.session_id);
             let plan =
                 remediation_plan(session, matching_panes.first().copied(), state, config, now);
-            if !plan.actions.is_empty() {
+            if arm && !plan.actions.is_empty() {
                 store.sessions.insert(
                     session.session_id.clone(),
                     SessionState {
@@ -654,7 +662,7 @@ fn watch_rows(
                     .map(format_target_match)
                     .unwrap_or_else(|| "ignored:no-target".to_string()),
                 gate: describe_gate(&plan.gate),
-                actions: describe_actions(&plan.actions),
+                actions: describe_watch_actions(&plan.actions, arm),
             }
         })
         .collect();
@@ -902,6 +910,19 @@ fn describe_actions(actions: &[PlannedAction]) -> String {
         })
         .collect::<Vec<_>>()
         .join(" then ")
+}
+
+fn describe_watch_actions(actions: &[PlannedAction], arm: bool) -> String {
+    if actions.is_empty() {
+        return "-".to_string();
+    }
+
+    let actions = describe_actions(actions);
+    if arm {
+        actions
+    } else {
+        format!("dry-run:{actions}")
+    }
 }
 
 fn join_or_dash<'a>(values: impl Iterator<Item = &'a str>) -> String {
