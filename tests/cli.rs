@@ -6,6 +6,16 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[test]
+fn version_flag_reports_package_version() {
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("counterspell 0.1.0"));
+}
+
+#[test]
 fn status_discovers_recent_sessions_and_maps_by_cwd() {
     let temp = tempfile::tempdir().expect("tempdir");
     let projects = temp.path().join("projects");
