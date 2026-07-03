@@ -331,7 +331,11 @@ fn dashboard_render_shows_herdr_panes_and_session_toggles() {
     let html = render_dashboard_html(&snapshot);
 
     assert!(html.contains("Counterspell"));
-    assert!(html.contains("Herdr Claude Code panes"));
+    assert!(html.contains("Herdr Mirror Column Drilldown"));
+    assert!(html.contains("Claude Code panes"));
+    assert!(html.contains("workspace -> tab -> session -> action"));
+    assert!(html.contains("data-workspace-trigger=\"w1\""));
+    assert!(html.contains("data-pane-trigger=\"pane-1\""));
     assert!(html.contains("commander"));
     assert!(html.contains("Tab 19: pure act / pane-1"));
     assert!(html.contains("claude-fable-5"));

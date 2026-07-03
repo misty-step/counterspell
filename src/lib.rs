@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod dashboard;
+mod dashboard_render;
 mod defaults;
 mod herdr;
 mod indicators;
