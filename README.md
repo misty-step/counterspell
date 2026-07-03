@@ -15,19 +15,29 @@ Run these from the project directory you want Counterspell allowed to touch.
 The first command creates an explicit opt-in target; no other sessions can be
 armed.
 
-1. Initialize the opt-in config:
+1. Run guided setup:
 
 ```sh
-counterspell init --cwd-pattern "$PWD" --target-model claude-fable-5
+counterspell setup --cwd-pattern "$PWD" --install-ui
 ```
 
 2. Review discovered sessions and pane mapping:
 
 ```sh
+counterspell doctor
 counterspell status
 ```
 
-3. Run the armed watch pass:
+3. Open the local dashboard:
+
+```sh
+counterspell ui
+```
+
+It serves a browser UI on `127.0.0.1`, opens it by default, and refreshes the
+same status rows that `counterspell status` prints.
+
+4. Run the armed watch pass:
 
 ```sh
 counterspell watch --arm
@@ -35,6 +45,16 @@ counterspell watch --arm
 
 Plain `counterspell watch` is a dry-run. It reports eligible compact/switch
 actions without sending text to Herdr or writing debounce state.
+
+For an exact live conversation, prefer a session target:
+
+```sh
+counterspell target add --session-id db72af91-c78f-4b3f-80be-6dca7c264f75
+counterspell target list
+```
+
+`target add` defaults to `claude-fable-5`; pass `--target-model` when a target
+should enforce a different model.
 
 ## Config
 
@@ -64,11 +84,31 @@ Selectors are `session_id`, `project_pattern`, or `cwd_pattern`. Patterns
 support `*`. There is no global target model: sessions that do not match a
 target are ignored, even when Counterspell observes model drift.
 
-## Indicator
+## UI And Indicators
+
+For a visible local UI, run:
+
+```sh
+counterspell ui
+```
+
+The dashboard shows whether Counterspell is running, watched vs ignored
+sessions, Herdr pane mapping, target model, current model, drift, and gating
+state. `counterspell ui --no-open` starts the same server without launching a
+browser.
 
 Counterspell ships a SwiftBar/xbar plugin that reads `counterspell status
 --json` and renders a menu-bar dot, watched-session count, and last trigger
 event.
+
+Install the menu-bar plugin and a LaunchAgent that periodically annotates Herdr
+panes:
+
+```sh
+counterspell install-ui --load
+```
+
+Or install only the SwiftBar plugin manually:
 
 ```sh
 mkdir -p "$HOME/Library/Application Support/SwiftBar/Plugins"
@@ -88,6 +128,11 @@ counterspell --annotate-herdr
 Counterspell uses `herdr pane report-metadata` with source `counterspell` to set
 a short-lived title/custom status on watched panes. This does not permanently
 rename panes.
+
+If more than one live Herdr pane maps to the same transcript cwd, Counterspell
+shows `ambiguous-pane:<count>` and will not arm remediation for that session.
+Use session-specific targets for visibility, and avoid `watch --arm` until the
+pane mapping is unique.
 
 ## Scope
 
@@ -110,6 +155,7 @@ compact-then-switch sequence.
 ```sh
 cargo fmt -- --check && cargo test && cargo clippy --all-targets -- -D warnings
 cargo install --path .
+counterspell doctor
 counterspell status
 counterspell status --json
 counterspell watch --arm
