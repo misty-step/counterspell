@@ -88,9 +88,9 @@ It does not require SwiftBar, xbar, npm, or a separate frontend server. Every
 page load recomputes state from configured targets, transcript JSONLs, and
 Herdr workspace/tab/pane lists.
 
-The dashboard is an operator surface, not a remediation path. It groups live
-Claude Code panes by Herdr workspace and tab, shows recent transcript sessions
-that match each pane cwd, and exposes enable/disable forms for direct
+The dashboard is an operator surface, not a remediation path. It mirrors Herdr
+as a column drilldown: workspace -> Claude Code tab/pane -> recent transcript
+session -> explicit target action. The action forms only mutate direct
 `session_id` targets. Sessions enabled by broader `project_pattern` or
 `cwd_pattern` rules are shown as pattern-managed because the config format has
 no per-session exclusion override.
