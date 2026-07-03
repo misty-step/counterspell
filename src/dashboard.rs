@@ -268,6 +268,7 @@ pub(crate) fn render_dashboard_html(snapshot: &DashboardSnapshot) -> String {
       background: var(--bg);
       color: var(--ink);
       font: 14px/1.42 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      overflow-x: hidden;
     }}
     main {{ width: min(1180px, calc(100vw - 40px)); margin: 24px auto 36px; }}
     header {{
@@ -295,7 +296,7 @@ pub(crate) fn render_dashboard_html(snapshot: &DashboardSnapshot) -> String {
     .subtitle {{ margin-top: 5px; color: var(--muted); overflow-wrap: anywhere; }}
     .summary {{ display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }}
     .metric {{
-      min-width: 96px;
+      min-width: 108px;
       padding: 8px 10px;
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -315,34 +316,49 @@ pub(crate) fn render_dashboard_html(snapshot: &DashboardSnapshot) -> String {
     .count {{ color: var(--muted); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
     .pane {{
       display: grid;
-      grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
-      gap: 18px;
+      grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+      gap: 14px;
       align-items: stretch;
-      padding: 14px;
+      padding: 12px;
       margin-top: 8px;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: var(--panel);
-      box-shadow: var(--shadow);
+      box-shadow: 0 1px 2px rgba(23, 32, 38, .06);
+      overflow: hidden;
     }}
     .pane-main {{ min-width: 0; }}
-    .pane-title {{ display: flex; align-items: center; gap: 8px; min-width: 0; }}
+    .pane-title {{ display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }}
     .pane-title strong {{ font-size: 15px; }}
     .mono {{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; overflow-wrap: anywhere; }}
-    .path {{ margin-top: 8px; color: var(--muted); font-size: 12px; }}
+    .path {{ margin-top: 7px; color: var(--muted); font-size: 12px; }}
     .meta {{ margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }}
-    .sessions {{ display: grid; gap: 8px; }}
+    .sessions {{ min-width: 0; }}
+    .session-head {{
+      display: grid;
+      grid-template-columns: 84px minmax(0, 1fr) 128px;
+      gap: 10px;
+      padding: 0 0 6px;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+      border-bottom: 1px solid var(--line);
+    }}
     .session {{
       display: grid;
-      grid-template-columns: minmax(92px, 120px) minmax(0, 1fr) auto;
+      grid-template-columns: 84px minmax(0, 1fr) 128px;
       gap: 10px;
       align-items: center;
-      padding: 8px 0;
+      padding: 9px 0;
       border-bottom: 1px solid var(--line);
     }}
     .session:last-child {{ border-bottom: 0; }}
-    .session-detail {{ min-width: 0; color: var(--muted); font-size: 12px; }}
+    .session-id {{ font-size: 13px; font-weight: 700; color: var(--ink); }}
+    .session-detail {{ min-width: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }}
     .session-detail strong {{ color: var(--ink); font-weight: 600; }}
+    .session-subline {{ margin-top: 2px; }}
+    .session-action {{ display: flex; justify-content: flex-end; align-items: center; gap: 8px; }}
     .chip {{
       display: inline-flex;
       align-items: center;
@@ -353,6 +369,9 @@ pub(crate) fn render_dashboard_html(snapshot: &DashboardSnapshot) -> String {
       background: #f8fafb;
       white-space: nowrap;
       font-size: 12px;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }}
     .chip.ok {{ color: var(--green); border-color: rgba(29,127,86,.28); background: rgba(29,127,86,.08); }}
     .chip.warn {{ color: var(--amber); border-color: rgba(152,109,24,.28); background: rgba(152,109,24,.10); }}
@@ -360,26 +379,40 @@ pub(crate) fn render_dashboard_html(snapshot: &DashboardSnapshot) -> String {
     .chip.info {{ color: var(--blue); border-color: rgba(36,94,154,.26); background: rgba(36,94,154,.08); }}
     form {{ margin: 0; }}
     button {{
-      min-width: 82px;
-      height: 32px;
+      min-width: 80px;
+      min-height: 34px;
       border-radius: 8px;
       border: 1px solid var(--line);
       background: var(--ink);
       color: #fff;
       font: inherit;
       cursor: pointer;
+      transition-property: transform, background-color, border-color;
+      transition-duration: 140ms;
+      transition-timing-function: cubic-bezier(.2, 0, 0, 1);
     }}
+    button:active {{ transform: scale(.96); }}
+    button:focus-visible {{ outline: 2px solid var(--blue); outline-offset: 2px; }}
     button.off {{ background: #fff; color: var(--red); border-color: rgba(179,57,57,.35); }}
     button:disabled {{ cursor: default; color: var(--muted); background: var(--soft); }}
     .empty {{ margin-top: 20px; padding: 20px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--panel); }}
     footer {{ margin-top: 14px; color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }}
     @media (max-width: 820px) {{
-      main {{ width: min(100vw - 24px, 1180px); margin-top: 18px; }}
+      main {{ width: min(100%, calc(100vw - 24px)); margin-top: 18px; }}
       header {{ display: block; }}
-      .summary {{ justify-content: flex-start; margin-top: 14px; }}
+      .summary {{ display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); justify-content: stretch; width: 100%; max-width: 100%; margin-top: 14px; }}
+      .metric {{ width: auto; min-width: 0; padding: 8px; }}
+      .metric span {{ font-size: 10px; overflow-wrap: anywhere; }}
+      .counterspell-chip {{ display: none; }}
       .pane {{ grid-template-columns: 1fr; }}
-      .session {{ grid-template-columns: 1fr; align-items: start; }}
-      button {{ width: 100%; }}
+      .session-head {{ display: none; }}
+      .session {{ grid-template-columns: 76px minmax(0, 1fr); align-items: start; }}
+      .session-action {{ grid-column: 1 / -1; justify-content: flex-start; }}
+      button {{ min-width: 96px; }}
+    }}
+    @media (prefers-reduced-motion: reduce) {{
+      button {{ transition-duration: 0ms; }}
+      button:active {{ transform: none; }}
     }}
   </style>
 </head>
@@ -576,18 +609,23 @@ fn render_pane(pane: &ClaudePaneView) -> String {
         r#"<div class="empty">No recent transcript session mapped to this pane cwd.</div>"#
             .to_string()
     } else {
-        pane.sessions
-            .iter()
-            .map(render_session)
-            .collect::<Vec<_>>()
-            .join("")
+        format!(
+            r#"<div class="session-head"><span>Session</span><span>Latest match</span><span>Counterspell</span></div>{}"#,
+            pane.sessions
+                .iter()
+                .map(render_session)
+                .collect::<Vec<_>>()
+                .join("")
+        )
     };
+    let enabled_count = pane
+        .sessions
+        .iter()
+        .filter(|session| session.enabled)
+        .count();
+    let session_total = pane.sessions.len();
     let enabled_class = if pane.enabled() { "ok" } else { "warn" };
-    let enabled_label = if pane.enabled() {
-        "enabled"
-    } else {
-        "disabled"
-    };
+    let enabled_label = format!("{enabled_count}/{session_total} enabled");
     let focus = if pane.focused {
         r#"<span class="chip info">focused</span>"#
     } else {
@@ -604,8 +642,7 @@ fn render_pane(pane: &ClaudePaneView) -> String {
     <div class="meta">
       <span class="chip {}">{}</span>
       <span class="chip {}">{}</span>
-      <span class="chip info">{}</span>
-      <span class="chip info">{}</span>
+      {}
     </div>
   </div>
   <div class="sessions">{}</div>
@@ -616,9 +653,8 @@ fn render_pane(pane: &ClaudePaneView) -> String {
         status_class(&pane.pane_status),
         html_escape(&pane.pane_status),
         enabled_class,
-        enabled_label,
-        html_escape(title),
-        html_escape(custom_status),
+        html_escape(&enabled_label),
+        render_counterspell_meta(title, custom_status),
         sessions
     )
 }
@@ -644,31 +680,55 @@ fn render_session(session: &ClaudeSessionView) -> String {
         )
     };
     let enabled_class = if session.enabled { "ok" } else { "warn" };
-    let enabled_label = if session.enabled {
-        "enabled"
+    let enabled_label = if session.enabled { "on" } else { "off" };
+    let target = if session.enabled {
+        compact_target(&session.target)
     } else {
-        "disabled"
+        "not targeted".to_string()
     };
 
     format!(
         r#"<div class="session">
-  <div><span class="mono">{}</span></div>
+  <div><span class="mono session-id">{}</span></div>
   <div class="session-detail">
-    <strong>{}</strong> <span>{}</span><br>
-    <span class="mono">{}</span> <span>{}</span> <span>{}</span>
+    <strong>{}</strong> <span>{}</span>
+    <div class="session-subline"><span>{}</span></div>
   </div>
-  <div class="meta"><span class="chip {}">{}</span>{}</div>
+  <div class="session-action"><span class="chip {}">{}</span>{}</div>
 </div>"#,
         html_escape(&session.short_session_id),
-        html_escape(&session.project),
-        html_escape(&session.updated),
         html_escape(&session.model),
-        html_escape(&session.target),
-        html_escape(&session.session_id),
+        html_escape(&session.updated),
+        html_escape(&target),
         enabled_class,
         enabled_label,
         action
     )
+}
+
+fn compact_target(target: &str) -> String {
+    let model = target.split_whitespace().next().unwrap_or(target);
+    format!("target {model}")
+}
+
+fn render_counterspell_meta(title: &str, custom_status: &str) -> String {
+    if title == "-" && custom_status == "-" {
+        return String::new();
+    }
+    let mut items = Vec::new();
+    if title != "-" {
+        items.push(format!(
+            r#"<span class="chip info counterspell-chip">{}</span>"#,
+            html_escape(title)
+        ));
+    }
+    if custom_status != "-" {
+        items.push(format!(
+            r#"<span class="chip info counterspell-chip">{}</span>"#,
+            html_escape(custom_status)
+        ));
+    }
+    items.join("")
 }
 
 fn render_dashboard_json(snapshot: &DashboardSnapshot) -> String {
