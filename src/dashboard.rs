@@ -16,7 +16,7 @@ use crate::herdr::{
     load_herdr_panes, load_herdr_tabs, load_herdr_workspaces, HerdrPane, HerdrTab, HerdrWorkspace,
 };
 use crate::model::{Config, TargetRule, TranscriptSession};
-use crate::remediation::{format_target_match, target_for_session};
+use crate::remediation::{format_target_match, is_auto_fable_target, target_for_session};
 use crate::sessions::discover_recent_sessions;
 use crate::util::{home_dir, human_age, normalize_path, short_session};
 
@@ -59,6 +59,7 @@ pub(crate) struct ClaudeSessionView {
     pub(crate) updated: String,
     pub(crate) enabled: bool,
     pub(crate) direct_target: bool,
+    pub(crate) auto_target: bool,
     pub(crate) target: String,
 }
 
@@ -138,6 +139,9 @@ pub(crate) fn build_dashboard_snapshot(
                 .map(|session| {
                     let target = target_for_session(session, config);
                     let enabled = target.is_some();
+                    let auto_target = target
+                        .as_ref()
+                        .is_some_and(|target| is_auto_fable_target(session, target));
                     ClaudeSessionView {
                         session_id: session.session_id.clone(),
                         short_session_id: short_session(&session.session_id),
@@ -149,6 +153,7 @@ pub(crate) fn build_dashboard_snapshot(
                         updated: human_age(session.last_event_at, generated_at),
                         enabled,
                         direct_target: direct_session_targets.contains(&session.session_id),
+                        auto_target,
                         target: target
                             .as_ref()
                             .map(format_target_match)
@@ -396,6 +401,7 @@ fn render_dashboard_json(snapshot: &DashboardSnapshot) -> String {
                         "updated": session.updated,
                         "enabled": session.enabled,
                         "direct_target": session.direct_target,
+                        "auto_target": session.auto_target,
                         "target": session.target,
                     })
                 }).collect::<Vec<_>>(),

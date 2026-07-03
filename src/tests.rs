@@ -153,7 +153,7 @@ fn ambiguous_pane_matches_block_remediation() {
 }
 
 #[test]
-fn unconfigured_drift_is_observed_but_not_armed() {
+fn fable_history_is_auto_targeted_without_config() {
     let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
         .unwrap()
         .with_timezone(&Utc);
@@ -166,12 +166,21 @@ fn unconfigured_drift_is_observed_but_not_armed() {
     let plan = remediation_plan(&session, &panes, None, &config, now);
 
     assert!(detect_drift(&session, "claude-fable-5").is_some());
-    assert!(plan.actions.is_empty());
-    assert_eq!(target_for_session(&session, &config), None);
+    assert_eq!(
+        plan.actions,
+        vec![
+            PlannedAction::Compact,
+            PlannedAction::SwitchModel("claude-fable-5".to_string())
+        ]
+    );
+    assert_eq!(
+        format_target_match(&target_for_session(&session, &config).expect("auto target")),
+        "claude-fable-5 (auto:fable)"
+    );
 }
 
 #[test]
-fn status_marks_unconfigured_sessions_ignored_not_ok() {
+fn status_marks_fable_history_sessions_watched_without_config() {
     let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
         .unwrap()
         .with_timezone(&Utc);
@@ -184,10 +193,10 @@ fn status_marks_unconfigured_sessions_ignored_not_ok() {
     let rows = status_rows(&[session], &[pane], &store, &config, now);
 
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].watch, "ignored");
-    assert_eq!(rows[0].target, "no-target");
+    assert_eq!(rows[0].watch, "watched");
+    assert_eq!(rows[0].target, "claude-fable-5 (auto:fable)");
     assert_eq!(rows[0].model, "claude-opus-4-1");
-    assert_eq!(rows[0].drift, "ignored");
+    assert_eq!(rows[0].drift, "claude-fable-5->claude-opus-4-1");
 }
 
 #[test]
@@ -332,12 +341,43 @@ fn dashboard_render_shows_herdr_panes_and_session_toggles() {
 
     assert!(html.contains("Counterspell"));
     assert!(html.contains("Herdr Mirror Column Drilldown"));
-    assert!(html.contains("Claude Code panes"));
-    assert!(html.contains("workspace -> tab -> session -> action"));
+    assert!(html.contains("Fable Claude Code sessions auto-watch"));
+    assert!(html.contains("workspace -> tab -> session -> policy"));
     assert!(html.contains("data-workspace-trigger=\"w1\""));
     assert!(html.contains("data-pane-trigger=\"pane-1\""));
     assert!(html.contains("commander"));
     assert!(html.contains("Tab 19: pure act / pane-1"));
     assert!(html.contains("claude-fable-5"));
-    assert!(html.contains("Disable"));
+    assert!(html.contains("Auto"));
+}
+
+#[test]
+fn dashboard_render_marks_fable_history_sessions_auto() {
+    let generated_at = DateTime::parse_from_rfc3339("2026-07-03T18:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let mut config = test_config();
+    config.targets.clear();
+    let snapshot = build_dashboard_snapshot(
+        generated_at,
+        &config,
+        &[test_session(generated_at)],
+        &[idle_pane()],
+        &[HerdrWorkspace {
+            workspace_id: "w1".to_string(),
+            label: Some("commander".to_string()),
+            number: Some(1),
+        }],
+        &[HerdrTab {
+            tab_id: "w1:t1".to_string(),
+            label: Some("pure act".to_string()),
+            number: Some(19),
+        }],
+    );
+
+    let html = render_dashboard_html(&snapshot);
+
+    assert!(html.contains("Auto"));
+    assert!(html.contains("target claude-fable-5"));
+    assert!(!html.contains(r#"<button type="submit">Enable</button>"#));
 }

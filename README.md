@@ -1,7 +1,7 @@
 # Counterspell
 
 Counterspell watches recent Claude transcript sessions, maps them to live Herdr
-panes, and only arms model-correction actions for explicitly configured targets.
+panes, and automatically keeps Fable Claude Code sessions on Fable.
 
 ## Install
 
@@ -11,14 +11,10 @@ cargo install --path .
 
 ## Quickstart
 
-Run these from the project directory you want Counterspell allowed to touch.
-The first command creates an explicit opt-in target; no other sessions can be
-armed.
-
 1. Run guided setup:
 
 ```sh
-counterspell setup --cwd-pattern "$PWD" --install-ui
+counterspell setup --install-ui
 ```
 
 2. Review discovered sessions and pane mapping:
@@ -35,8 +31,8 @@ counterspell ui
 ```
 
 It serves a browser UI on `127.0.0.1`, opens it by default, and refreshes the
-live Herdr Claude Code panes. Enable/disable buttons edit explicit
-`session_id` targets in `~/.counterspell/config.toml`.
+live Herdr Claude Code panes. Fable sessions are marked active automatically;
+non-Fable sessions stay inactive unless you add a configured override.
 
 4. Run the armed watch pass:
 
@@ -47,24 +43,27 @@ counterspell watch --arm
 Plain `counterspell watch` is a dry-run. It reports eligible compact/switch
 actions without sending text to Herdr or writing debounce state.
 
-For an exact live conversation, prefer a session target:
+For an explicit override, add a configured target:
 
 ```sh
 counterspell target add --session-id db72af91-c78f-4b3f-80be-6dca7c264f75
 counterspell target list
 ```
 
-`target add` defaults to `claude-fable-5`; pass `--target-model` when a target
-should enforce a different model.
+`target add` defaults to `claude-fable-5`; pass `--target-model` only when an
+override should enforce a different model.
 
 ## Config
 
 Default config path: `~/.counterspell/config.toml`.
 
-Counterspell is strictly opt-in. There is no global target model. Unmatched
-sessions are always ignored, including deliberate Sonnet or Opus sessions.
+Counterspell has one built-in automatic policy: any recent Claude Code
+transcript whose model history includes `claude-fable-5` is watched with
+`claude-fable-5` as the desired model. That keeps a session active after it
+drifts away from Fable, which is when Counterspell needs to act.
 
-Each `[[targets]]` entry must set exactly one selector and one explicit
+Configured `[[targets]]` entries are still supported for overrides and extra
+coverage. Each entry must set exactly one selector and one explicit
 `target_model`:
 
 ```toml
@@ -82,8 +81,8 @@ target_model = "claude-fable-5"
 ```
 
 Selectors are `session_id`, `project_pattern`, or `cwd_pattern`. Patterns
-support `*`. There is no global target model: sessions that do not match a
-target are ignored, even when Counterspell observes model drift.
+support `*`. Sessions that have never run Fable and do not match a configured
+target are ignored.
 
 ## UI And Indicators
 
@@ -95,12 +94,11 @@ counterspell ui
 
 The dashboard is a Herdr Mirror column drilldown: choose a workspace, choose a
 Claude Code tab/pane, inspect recent transcript sessions for that pane cwd, and
-enable or disable direct session targets. `counterspell ui --no-open` starts
-the same server without launching a browser.
+see whether each session is auto-watched by the Fable policy. `counterspell ui
+--no-open` starts the same server without launching a browser.
 
-If a session is enabled by a broad `project_pattern` or `cwd_pattern`, the UI
-shows that it is pattern-managed instead of pretending a per-session disable can
-override the broader config rule.
+Automatic Fable sessions show as `Auto`. Explicit config matches show as
+configured. Sessions that have never run Fable show as inactive.
 
 Counterspell ships a SwiftBar/xbar plugin that reads `counterspell status
 --json` and renders a menu-bar dot, watched-session count, and last trigger
@@ -149,8 +147,8 @@ transcript.
 The armed remediation path is scoped to Herdr terminal panes. `watch --arm`
 sends a plain `/compact ...` handoff, waits for the pane to become idle, then
 sends `/model <target_model>`. No tmux backend is included yet; that is a filed
-follow-up. Deliberate Sonnet/Opus sessions remain untouched unless they are
-explicitly targeted in config.
+follow-up. Deliberate Sonnet/Opus sessions remain untouched unless they have
+previously run Fable or are explicitly targeted in config.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for detection vs arming, gating, and the
 compact-then-switch sequence.

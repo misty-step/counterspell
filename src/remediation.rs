@@ -1,13 +1,15 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 
-use crate::defaults::{COMPACT_COMMAND, COMPACT_WAIT_TIMEOUT_MS};
+use crate::defaults::{COMPACT_COMMAND, COMPACT_WAIT_TIMEOUT_MS, DEFAULT_TARGET_MODEL};
 use crate::herdr::{run_herdr_args, HerdrPane};
 use crate::model::{
     Config, GateBlocker, GateDecision, ModelDrift, PlannedAction, RemediationPlan, SessionState,
     TargetMatch, TranscriptSession,
 };
 use crate::util::unix_to_utc;
+
+pub(crate) const AUTO_FABLE_REASON: &str = "auto:fable";
 
 pub(crate) fn execute_remediation(pane_id: &str, actions: &[PlannedAction]) -> Result<()> {
     for action in actions {
@@ -103,7 +105,25 @@ pub(crate) fn target_for_session(
         }
     }
 
+    if has_auto_fable_history(session) {
+        return Some(TargetMatch {
+            target_model: DEFAULT_TARGET_MODEL.to_string(),
+            reason: AUTO_FABLE_REASON.to_string(),
+        });
+    }
+
     None
+}
+
+pub(crate) fn has_auto_fable_history(session: &TranscriptSession) -> bool {
+    session
+        .model_history
+        .iter()
+        .any(|model| model == DEFAULT_TARGET_MODEL)
+}
+
+pub(crate) fn is_auto_fable_target(session: &TranscriptSession, target: &TargetMatch) -> bool {
+    target.target_model == DEFAULT_TARGET_MODEL && has_auto_fable_history(session)
 }
 
 pub(crate) fn format_target_match(target: &TargetMatch) -> String {

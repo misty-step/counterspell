@@ -43,7 +43,7 @@ pub(crate) fn render_dashboard_html(snapshot: &DashboardSnapshot) -> String {
       <div>
         <span class="chrome">Counterspell</span>
         <h1>Herdr Mirror Column Drilldown</h1>
-        <p>Claude Code panes and explicit session targets.</p>
+        <p>Fable Claude Code sessions auto-watch.</p>
       </div>
       <section class="metrics" aria-label="Counterspell summary">
         <div><strong>{}</strong><span>Claude panes</span></div>
@@ -56,8 +56,8 @@ pub(crate) fn render_dashboard_html(snapshot: &DashboardSnapshot) -> String {
     <section class="stage">
       <header class="stage-head">
         <div>
-          <span class="chrome">workspace -> tab -> session -> action</span>
-          <strong>Choose space, tab, session, action.</strong>
+          <span class="chrome">workspace -> tab -> session -> policy</span>
+          <strong>Fable sessions are active automatically.</strong>
         </div>
         <a href="/status.json">status.json</a>
       </header>
@@ -237,6 +237,14 @@ fn render_session_column(panes: &[ClaudePaneView]) -> String {
 }
 
 fn render_session_row(session: &ClaudeSessionView) -> String {
+    let status_label = if session.auto_target {
+        "auto"
+    } else if session.enabled {
+        "enabled"
+    } else {
+        "ignored"
+    };
+
     format!(
         r#"<article class="session-row">
   <div>
@@ -250,11 +258,7 @@ fn render_session_row(session: &ClaudeSessionView) -> String {
         html_escape(&session.model),
         html_escape(&session.updated),
         if session.enabled { "ok" } else { "muted" },
-        if session.enabled {
-            "enabled"
-        } else {
-            "ignored"
-        },
+        status_label,
         html_escape(&session_target_label(session))
     )
 }
@@ -286,9 +290,9 @@ fn render_action_column(panes: &[ClaudePaneView]) -> String {
                 html_escape(pane.title.as_deref().unwrap_or("-")),
                 html_escape(pane.custom_status.as_deref().unwrap_or("-")),
                 if pane.enabled() {
-                    "watched explicit sessions"
+                    "watched Fable sessions"
                 } else {
-                    "ignored by default"
+                    "no Fable session"
                 },
                 render_session_actions(pane)
             )
@@ -298,7 +302,7 @@ fn render_action_column(panes: &[ClaudePaneView]) -> String {
 
     format!(
         r#"<section class="column action">
-  <header><strong>action</strong><span>explicit target</span></header>
+  <header><strong>policy</strong><span>auto target</span></header>
   <div class="column-scroll">{}</div>
 </section>"#,
         panels
@@ -313,7 +317,9 @@ fn render_session_actions(pane: &ClaudePaneView) -> String {
     pane.sessions
         .iter()
         .map(|session| {
-            let control = if session.direct_target {
+            let control = if session.auto_target {
+                r#"<button type="button" disabled>Auto</button>"#.to_string()
+            } else if session.direct_target {
                 format!(
                     r#"<form method="post" action="/targets/disable">
   <input type="hidden" name="session_id" value="{}">
@@ -322,15 +328,9 @@ fn render_session_actions(pane: &ClaudePaneView) -> String {
                     html_escape(&session.session_id)
                 )
             } else if session.enabled {
-                r#"<button type="button" disabled>Pattern</button>"#.to_string()
+                r#"<button type="button" disabled>Configured</button>"#.to_string()
             } else {
-                format!(
-                    r#"<form method="post" action="/targets/enable">
-  <input type="hidden" name="session_id" value="{}">
-  <button type="submit">Enable</button>
-</form>"#,
-                    html_escape(&session.session_id)
-                )
+                r#"<button type="button" disabled>Not Fable</button>"#.to_string()
             };
             format!(
                 r#"<div class="action-row">
