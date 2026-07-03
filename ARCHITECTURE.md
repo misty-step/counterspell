@@ -83,14 +83,17 @@ to infer a hidden policy from clever wording.
 
 ## UI And Indicators
 
-`counterspell ui` serves a local browser dashboard from the Rust CLI itself. It
-does not require SwiftBar, xbar, npm, or a separate frontend server. Every page
-load recomputes status from the same boundaries as `counterspell status`:
-configured targets, transcript JSONLs, debounce state, and `herdr pane list`.
+`counterspell ui` serves a local Herdr control panel from the Rust CLI itself.
+It does not require SwiftBar, xbar, npm, or a separate frontend server. Every
+page load recomputes state from configured targets, transcript JSONLs, and
+Herdr workspace/tab/pane lists.
 
-The dashboard is an operator surface, not a remediation path. It shows watched
-vs ignored sessions, pane mapping, target model, current model, drift, and the
-gate state that would block or allow an armed watch pass.
+The dashboard is an operator surface, not a remediation path. It groups live
+Claude Code panes by Herdr workspace and tab, shows recent transcript sessions
+that match each pane cwd, and exposes enable/disable forms for direct
+`session_id` targets. Sessions enabled by broader `project_pattern` or
+`cwd_pattern` rules are shown as pattern-managed because the config format has
+no per-session exclusion override.
 
 `counterspell status --json` emits a summary and row list for external
 indicators. The SwiftBar/xbar plugin in `extras/swiftbar/` uses that JSON to

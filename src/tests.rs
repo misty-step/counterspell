@@ -1,6 +1,7 @@
 use super::*;
-use crate::dashboard::{render_dashboard_html, DashboardSnapshot};
-use crate::model::{StatusRow, StatusSummary};
+use crate::config::{parse_config_file, remove_session_target_from_config};
+use crate::dashboard::{build_dashboard_snapshot, render_dashboard_html};
+use crate::herdr::{HerdrTab, HerdrWorkspace};
 use std::io::Write;
 
 fn test_config() -> Config {
@@ -32,10 +33,15 @@ fn test_session(now: DateTime<Utc>) -> TranscriptSession {
 fn idle_pane() -> HerdrPane {
     HerdrPane {
         pane_id: "pane-1".to_string(),
+        workspace_id: "w1".to_string(),
+        tab_id: "w1:t1".to_string(),
         cwd: Some("/repo".to_string()),
         foreground_cwd: Some("/repo".to_string()),
         agent: Some("claude".to_string()),
         agent_status: Some("idle".to_string()),
+        focused: false,
+        title: None,
+        custom_status: None,
     }
 }
 
@@ -270,39 +276,64 @@ target_model = "claude-fable-5"
 }
 
 #[test]
-fn dashboard_render_shows_running_state_and_watched_session() {
-    let snapshot = DashboardSnapshot {
-        generated_at: DateTime::parse_from_rfc3339("2026-07-03T18:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc),
-        summary: StatusSummary {
-            total: 1,
-            watched: 1,
-            ignored: 0,
-            mapped: 1,
-            live_panes: 0,
-            last_trigger_event: None,
-            last_trigger_unix: None,
-        },
-        rows: vec![StatusRow {
-            session_id: "session1".to_string(),
-            project: "project".to_string(),
-            cwd: "/repo".to_string(),
-            pane: "wN:pB".to_string(),
-            agent: "claude".to_string(),
-            state: "idle".to_string(),
-            watch: "watched".to_string(),
-            target: "claude-fable-5 (session_id)".to_string(),
-            model: "claude-fable-5".to_string(),
-            drift: "ok".to_string(),
-            updated: "live".to_string(),
+fn remove_session_target_rewrites_config_without_touching_other_targets() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("counterspell.toml");
+    std::fs::write(
+        &path,
+        r#"
+recent_hours = 12
+
+[[targets]]
+session_id = "session-1"
+target_model = "claude-fable-5"
+
+[[targets]]
+project_pattern = "project*"
+target_model = "claude-fable-5"
+"#,
+    )
+    .expect("config");
+
+    assert!(remove_session_target_from_config(&path, "session-1").expect("remove"));
+    let parsed = parse_config_file(&path).expect("parse");
+
+    assert_eq!(parsed.targets.len(), 1);
+    assert_eq!(
+        parsed.targets[0].project_pattern,
+        Some("project*".to_string())
+    );
+    assert_eq!(parsed.recent_hours, Some(12));
+}
+
+#[test]
+fn dashboard_render_shows_herdr_panes_and_session_toggles() {
+    let generated_at = DateTime::parse_from_rfc3339("2026-07-03T18:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let snapshot = build_dashboard_snapshot(
+        generated_at,
+        &test_config(),
+        &[test_session(generated_at)],
+        &[idle_pane()],
+        &[HerdrWorkspace {
+            workspace_id: "w1".to_string(),
+            label: Some("commander".to_string()),
+            number: Some(1),
         }],
-    };
+        &[HerdrTab {
+            tab_id: "w1:t1".to_string(),
+            label: Some("pure act".to_string()),
+            number: Some(19),
+        }],
+    );
 
     let html = render_dashboard_html(&snapshot);
 
     assert!(html.contains("Counterspell"));
-    assert!(html.contains("Running locally"));
-    assert!(html.contains("wN:pB"));
+    assert!(html.contains("Herdr Claude Code panes"));
+    assert!(html.contains("commander"));
+    assert!(html.contains("Tab 19: pure act / pane-1"));
     assert!(html.contains("claude-fable-5"));
+    assert!(html.contains("Disable"));
 }

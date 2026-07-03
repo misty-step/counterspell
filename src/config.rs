@@ -119,6 +119,25 @@ pub(crate) fn add_target_to_config(path: &Path, target: &TargetRule) -> Result<b
     Ok(true)
 }
 
+pub(crate) fn remove_session_target_from_config(path: &Path, session_id: &str) -> Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    let mut raw = parse_config_file(path)?;
+    let before = raw.targets.len();
+    raw.targets
+        .retain(|target| target.session_id.as_deref() != Some(session_id));
+    if raw.targets.len() == before {
+        return Ok(false);
+    }
+
+    validate_targets(raw.targets.clone())?;
+    fs::write(path, file_config_to_toml(&raw))
+        .with_context(|| format!("write config {}", path.display()))?;
+    Ok(true)
+}
+
 pub(crate) fn describe_target_rule(target: &TargetRule) -> String {
     let selector = if let Some(session_id) = &target.session_id {
         format!("session_id={session_id}")
@@ -234,6 +253,38 @@ fn target_to_toml(target: &TargetRule) -> String {
         escape_toml(&target.target_model)
     ));
     config
+}
+
+fn file_config_to_toml(config: &FileConfig) -> String {
+    let mut raw = String::new();
+
+    if let Some(projects_dir) = &config.projects_dir {
+        raw.push_str(&format!(
+            "projects_dir = \"{}\"\n",
+            escape_toml(&projects_dir.to_string_lossy())
+        ));
+    }
+    raw.push_str(&format!(
+        "recent_hours = {}\n",
+        config.recent_hours.unwrap_or(DEFAULT_RECENT_HOURS)
+    ));
+    raw.push_str(&format!(
+        "transcript_quiet_seconds = {}\n",
+        config
+            .transcript_quiet_seconds
+            .unwrap_or(DEFAULT_TRANSCRIPT_QUIET_SECONDS)
+    ));
+    raw.push_str(&format!(
+        "debounce_seconds = {}\n\n",
+        config.debounce_seconds.unwrap_or(DEFAULT_DEBOUNCE_SECONDS)
+    ));
+    raw.push_str("# Counterspell is opt-in. Add explicit [[targets]] before arming.\n");
+
+    for target in &config.targets {
+        raw.push_str(&target_to_toml(target));
+    }
+
+    raw
 }
 
 fn escape_toml(value: &str) -> String {

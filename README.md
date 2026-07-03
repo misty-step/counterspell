@@ -35,7 +35,8 @@ counterspell ui
 ```
 
 It serves a browser UI on `127.0.0.1`, opens it by default, and refreshes the
-same status rows that `counterspell status` prints.
+live Herdr Claude Code panes. Enable/disable buttons edit explicit
+`session_id` targets in `~/.counterspell/config.toml`.
 
 4. Run the armed watch pass:
 
@@ -92,10 +93,14 @@ For a visible local UI, run:
 counterspell ui
 ```
 
-The dashboard shows whether Counterspell is running, watched vs ignored
-sessions, Herdr pane mapping, target model, current model, drift, and gating
-state. `counterspell ui --no-open` starts the same server without launching a
-browser.
+The dashboard is Herdr-first: it groups live Claude Code panes by workspace and
+tab, shows the matching recent transcript sessions for each pane cwd, and lets
+the operator enable or disable direct session targets. `counterspell ui
+--no-open` starts the same server without launching a browser.
+
+If a session is enabled by a broad `project_pattern` or `cwd_pattern`, the UI
+shows that it is pattern-managed instead of pretending a per-session disable can
+override the broader config rule.
 
 Counterspell ships a SwiftBar/xbar plugin that reads `counterspell status
 --json` and renders a menu-bar dot, watched-session count, and last trigger
