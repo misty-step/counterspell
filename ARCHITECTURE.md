@@ -25,6 +25,10 @@ stay visible as `not-open`. Live Claude panes that have no recent transcript row
 are also shown as `herdr-live-pane` rows so the operator can see what
 Counterspell cannot yet target from transcript state.
 
+If one transcript cwd maps to multiple live panes, the row is visible but armed
+remediation is blocked as `ambiguous-pane:<count>`. Counterspell will not guess
+which pane owns a session.
+
 Detection is allowed to observe every recent session. Observation alone never
 authorizes remediation.
 
@@ -96,8 +100,15 @@ herdr pane report-metadata <pane> --source counterspell --title ... --custom-sta
 
 This is intentionally TTL-scoped metadata, not a permanent pane rename.
 
+`counterspell install-ui` installs both local indicator surfaces:
+
+- the SwiftBar/xbar plugin under `~/Library/Application Support/SwiftBar/Plugins`
+- a LaunchAgent that periodically runs `counterspell --annotate-herdr`
+
 ## Current Limits
 
 - Herdr is required for pane discovery and armed injection.
 - There is no tmux backend yet.
 - Herdr exposes title/custom-status metadata, not a dedicated badge API.
+- Same-cwd multi-pane sessions are visible but blocked from armed remediation
+  until Counterspell has a precise session-to-pane signal.

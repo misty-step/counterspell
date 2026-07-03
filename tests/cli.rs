@@ -299,6 +299,137 @@ fn init_writes_explicit_opt_in_config() {
 }
 
 #[test]
+fn target_add_appends_explicit_opt_in_target() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config = temp.path().join("config.toml");
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--config")
+        .arg(&config)
+        .arg("target")
+        .arg("add")
+        .arg("--session-id")
+        .arg("session-1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("added target"));
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--config")
+        .arg(&config)
+        .arg("target")
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "session_id=session-1 -> claude-fable-5",
+        ));
+
+    let config_text = fs::read_to_string(config).expect("config");
+    assert!(config_text.contains("[[targets]]"));
+    assert!(config_text.contains("session_id = \"session-1\""));
+    assert!(config_text.contains("target_model = \"claude-fable-5\""));
+}
+
+#[test]
+fn setup_can_create_config_target_and_ui_files() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config = temp.path().join("config.toml");
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--config")
+        .arg(&config)
+        .arg("setup")
+        .arg("--session-id")
+        .arg("session-1")
+        .arg("--install-ui")
+        .env("HOME", temp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("added target"))
+        .stdout(predicate::str::contains("installed SwiftBar plugin"))
+        .stdout(predicate::str::contains(
+            "installed Herdr annotation LaunchAgent",
+        ));
+
+    let config_text = fs::read_to_string(&config).expect("config");
+    assert!(config_text.contains("session_id = \"session-1\""));
+
+    let plugin = temp
+        .path()
+        .join("Library")
+        .join("Application Support")
+        .join("SwiftBar")
+        .join("Plugins")
+        .join("counterspell.5m.sh");
+    let launch_agent = temp
+        .path()
+        .join("Library")
+        .join("LaunchAgents")
+        .join("com.misty-step.counterspell.annotate-herdr.plist");
+    assert!(plugin.exists());
+    assert!(launch_agent.exists());
+    assert!(fs::read_to_string(plugin)
+        .expect("plugin")
+        .contains("COUNTERSPELL_BIN=\"${COUNTERSPELL_BIN:-"));
+    assert!(fs::read_to_string(launch_agent)
+        .expect("launch agent")
+        .contains("--annotate-herdr"));
+}
+
+#[test]
+fn doctor_reports_config_targets_and_herdr_summary() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let cwd = temp.path().join("repo");
+    fs::create_dir_all(&cwd).expect("cwd");
+    write_transcript(
+        &projects,
+        "-Users-phaedrus-Development-adminifi",
+        "adminifi-session",
+        &cwd,
+        "claude-fable-5",
+    );
+    let config = write_config(
+        temp.path(),
+        r#"
+[[targets]]
+session_id = "adminifi-session"
+target_model = "claude-fable-5"
+"#,
+    );
+    let state = temp.path().join("state.json");
+    let (fake_herdr, fixture) = fake_herdr(
+        temp.path(),
+        &[("w13:p1", &cwd, "claude", "idle", "adminifi")],
+    );
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("--recent-hours")
+        .arg("999")
+        .arg("doctor")
+        .env("HOME", temp.path())
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("counterspell doctor"))
+        .stdout(predicate::str::contains("targets: 1"))
+        .stdout(predicate::str::contains("herdr: reachable"))
+        .stdout(predicate::str::contains("watched=1"));
+}
+
+#[test]
 fn status_fails_when_herdr_mapping_fails_for_existing_sessions() {
     let temp = tempfile::tempdir().expect("tempdir");
     let projects = temp.path().join("projects");
@@ -383,6 +514,57 @@ target_model = "claude-fable-5"
         .stdout(predicate::str::contains(
             "compact then switch:claude-fable-5",
         ));
+}
+
+#[test]
+fn watch_blocks_ambiguous_same_cwd_panes() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let cwd = temp.path().join("repo");
+    fs::create_dir_all(&cwd).expect("cwd");
+    write_transcript_with_models(
+        &projects,
+        "-Users-phaedrus-Development-adminifi",
+        "adminifi-session",
+        &cwd,
+        &["claude-fable-5", "claude-opus-4-8"],
+    );
+    let config = write_config(
+        temp.path(),
+        r#"
+[[targets]]
+session_id = "adminifi-session"
+target_model = "claude-fable-5"
+"#,
+    );
+    let state = temp.path().join("state.json");
+    let (fake_herdr, fixture) = fake_herdr(
+        temp.path(),
+        &[
+            ("w13:p1", &cwd, "claude", "idle", "adminifi-a"),
+            ("w13:p2", &cwd, "claude", "idle", "adminifi-b"),
+        ],
+    );
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("--recent-hours")
+        .arg("999")
+        .arg("watch")
+        .arg("--arm")
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ambiguous-pane:2"))
+        .stdout(predicate::str::contains("compact then switch").not());
 }
 
 #[test]

@@ -8,6 +8,7 @@ use std::env;
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::time::SystemTime;
@@ -16,8 +17,11 @@ const STORE_VERSION: u8 = 2;
 const DEFAULT_RECENT_HOURS: u64 = 72;
 const DEFAULT_TRANSCRIPT_QUIET_SECONDS: u64 = 30;
 const DEFAULT_DEBOUNCE_SECONDS: u64 = 300;
+const DEFAULT_TARGET_MODEL: &str = "claude-fable-5";
 const COMPACT_WAIT_TIMEOUT_MS: u64 = 180_000;
 const COMPACT_COMMAND: &str = "/compact Plain handoff: summarize the current goal, repo/session state, exact next action, and any risks. Keep it factual and compact.";
+const SWIFTBAR_PLUGIN: &str = include_str!("../extras/swiftbar/counterspell.5m.sh");
+const LAUNCH_AGENT_LABEL: &str = "com.misty-step.counterspell.annotate-herdr";
 
 #[derive(Debug, Parser)]
 #[command(name = "counterspell")]
@@ -49,6 +53,14 @@ pub struct Cli {
 enum Commands {
     /// Create an opt-in config file.
     Init(InitArgs),
+    /// Guided local setup for config and indicators.
+    Setup(SetupArgs),
+    /// Inspect local install, config, Herdr, and indicator state.
+    Doctor(DoctorArgs),
+    /// Manage explicit opt-in targets.
+    Target(TargetArgs),
+    /// Install menu-bar and Herdr annotation indicators.
+    InstallUi(InstallUiArgs),
     /// Run one detection/gating pass over recent Claude sessions.
     Watch(WatchArgs),
     /// Show recent Claude sessions and their matching Herdr panes.
@@ -76,6 +88,92 @@ struct InitArgs {
     /// Required when a selector is provided.
     #[arg(long, value_name = "MODEL")]
     target_model: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct SetupArgs {
+    /// Overwrite an existing config file.
+    #[arg(long)]
+    force: bool,
+
+    /// Target exactly this transcript session id.
+    #[arg(long, value_name = "SESSION_ID")]
+    session_id: Option<String>,
+
+    /// Target transcript project directory labels, supports `*`.
+    #[arg(long, value_name = "PATTERN")]
+    project_pattern: Option<String>,
+
+    /// Target session cwd values, supports `*`.
+    #[arg(long, value_name = "PATTERN")]
+    cwd_pattern: Option<String>,
+
+    /// Model to enforce for the selected target.
+    #[arg(long, value_name = "MODEL", default_value = DEFAULT_TARGET_MODEL)]
+    target_model: String,
+
+    /// Install SwiftBar and Herdr annotation indicators.
+    #[arg(long)]
+    install_ui: bool,
+
+    /// Load the Herdr annotation LaunchAgent after writing it.
+    #[arg(long)]
+    load_ui: bool,
+}
+
+#[derive(Debug, Args)]
+struct DoctorArgs {}
+
+#[derive(Debug, Args)]
+struct TargetArgs {
+    #[command(subcommand)]
+    command: TargetCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum TargetCommand {
+    /// Add one explicit opt-in target.
+    Add(TargetAddArgs),
+    /// List explicit opt-in targets.
+    List,
+}
+
+#[derive(Debug, Args)]
+struct TargetAddArgs {
+    /// Target exactly this transcript session id.
+    #[arg(long, value_name = "SESSION_ID")]
+    session_id: Option<String>,
+
+    /// Target transcript project directory labels, supports `*`.
+    #[arg(long, value_name = "PATTERN")]
+    project_pattern: Option<String>,
+
+    /// Target session cwd values, supports `*`.
+    #[arg(long, value_name = "PATTERN")]
+    cwd_pattern: Option<String>,
+
+    /// Model to enforce for the selected target.
+    #[arg(long, value_name = "MODEL", default_value = DEFAULT_TARGET_MODEL)]
+    target_model: String,
+}
+
+#[derive(Debug, Args)]
+struct InstallUiArgs {
+    /// Do not install the SwiftBar/xbar plugin.
+    #[arg(long)]
+    no_swiftbar: bool,
+
+    /// Do not install the Herdr annotation LaunchAgent.
+    #[arg(long)]
+    no_herdr_annotation: bool,
+
+    /// Load the Herdr annotation LaunchAgent after writing it.
+    #[arg(long)]
+    load: bool,
+
+    /// LaunchAgent interval in seconds.
+    #[arg(long, value_name = "SECONDS", default_value_t = 60)]
+    interval_secs: u64,
 }
 
 #[derive(Debug, Args)]
@@ -235,6 +333,7 @@ enum PlannedAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum GateBlocker {
     NoPane,
+    AmbiguousPane(usize),
     TranscriptActive,
     PaneBusy(String),
     Debounce,
@@ -263,6 +362,10 @@ pub fn run(cli: Cli) -> Result<()> {
 
     match &cli.command {
         Some(Commands::Init(args)) => init(&cli, args),
+        Some(Commands::Setup(args)) => setup(&cli, args),
+        Some(Commands::Doctor(args)) => doctor(&cli, args),
+        Some(Commands::Target(args)) => target(&cli, args),
+        Some(Commands::InstallUi(args)) => install_ui(&cli, args),
         Some(Commands::Watch(args)) => watch(&cli, args),
         Some(Commands::Status(args)) => status(&cli, args),
         None => bail!("missing command; run `counterspell --help`"),
@@ -291,6 +394,210 @@ fn init(cli: &Cli, args: &InitArgs) -> Result<()> {
             "no targets configured; add [[targets]] before `counterspell watch --arm` can act"
         );
     }
+    Ok(())
+}
+
+fn setup(cli: &Cli, args: &SetupArgs) -> Result<()> {
+    let home = home_dir()?;
+    let path = config_path(cli.config.clone(), &home);
+    if path.exists() && args.force {
+        fs::write(&path, default_config_text())
+            .with_context(|| format!("write config {}", path.display()))?;
+        println!("reset {}", path.display());
+    } else {
+        ensure_config_file(&path)?;
+    }
+
+    if selector_count(&args.session_id, &args.project_pattern, &args.cwd_pattern) > 0 {
+        let target = target_rule_from_parts(
+            args.session_id.clone(),
+            args.project_pattern.clone(),
+            args.cwd_pattern.clone(),
+            args.target_model.clone(),
+        )?;
+        let added = add_target_to_config(&path, &target)?;
+        if added {
+            println!("added target {}", describe_target_rule(&target));
+        } else {
+            println!(
+                "target already configured {}",
+                describe_target_rule(&target)
+            );
+        }
+    }
+
+    if args.install_ui || args.load_ui {
+        install_ui(
+            cli,
+            &InstallUiArgs {
+                no_swiftbar: false,
+                no_herdr_annotation: false,
+                load: args.load_ui,
+                interval_secs: 60,
+            },
+        )?;
+    }
+
+    println!("run `counterspell doctor` to verify local setup");
+    Ok(())
+}
+
+fn doctor(cli: &Cli, _args: &DoctorArgs) -> Result<()> {
+    let home = home_dir()?;
+    let config_path = config_path(cli.config.clone(), &home);
+    let state_path = state_path(cli.state.clone())?;
+    let config = load_config(cli)?;
+
+    println!("counterspell doctor");
+    println!(
+        "binary: {}",
+        env::current_exe()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|_| "unknown".to_string())
+    );
+    println!(
+        "config: {} ({})",
+        config_path.display(),
+        if config_path.exists() {
+            "present"
+        } else {
+            "missing"
+        }
+    );
+    println!(
+        "state: {} ({})",
+        state_path.display(),
+        if state_path.exists() {
+            "present"
+        } else {
+            "missing"
+        }
+    );
+    println!(
+        "projects: {} ({})",
+        config.projects_dir.display(),
+        if config.projects_dir.exists() {
+            "present"
+        } else {
+            "missing"
+        }
+    );
+    println!("targets: {}", config.targets.len());
+
+    match load_herdr_panes() {
+        Ok(panes) => {
+            let now = Utc::now();
+            let store = load_store(&state_path)?;
+            let sessions = discover_recent_sessions(&config, now)?;
+            let rows = status_rows(&sessions, &panes, &store, &config, now);
+            println!("herdr: reachable ({} pane(s))", panes.len());
+            println!(
+                "sessions: total={} watched={} ignored={} mapped={} live-pane-only={}",
+                rows.len(),
+                rows.iter().filter(|row| row.watch == "watched").count(),
+                rows.iter().filter(|row| row.watch == "ignored").count(),
+                rows.iter()
+                    .filter(|row| row.pane != "not-open" && !row.session_id.starts_with("pane:"))
+                    .count(),
+                rows.iter()
+                    .filter(|row| row.project == "herdr-live-pane")
+                    .count()
+            );
+        }
+        Err(error) => {
+            println!("herdr: unreachable ({error:#})");
+        }
+    }
+
+    let swiftbar = swiftbar_plugin_path(&home);
+    let launch_agent = launch_agent_path(&home);
+    println!(
+        "swiftbar: {} ({})",
+        swiftbar.display(),
+        if swiftbar.exists() {
+            "installed"
+        } else {
+            "missing"
+        }
+    );
+    println!(
+        "herdr annotation agent: {} ({})",
+        launch_agent.display(),
+        if launch_agent.exists() {
+            "installed"
+        } else {
+            "missing"
+        }
+    );
+
+    Ok(())
+}
+
+fn target(cli: &Cli, args: &TargetArgs) -> Result<()> {
+    let home = home_dir()?;
+    let path = config_path(cli.config.clone(), &home);
+    match &args.command {
+        TargetCommand::Add(args) => {
+            ensure_config_file(&path)?;
+            let target = target_rule_from_parts(
+                args.session_id.clone(),
+                args.project_pattern.clone(),
+                args.cwd_pattern.clone(),
+                args.target_model.clone(),
+            )?;
+            let added = add_target_to_config(&path, &target)?;
+            if added {
+                println!("added target {}", describe_target_rule(&target));
+            } else {
+                println!(
+                    "target already configured {}",
+                    describe_target_rule(&target)
+                );
+            }
+        }
+        TargetCommand::List => {
+            let raw = if path.exists() {
+                parse_config_file(&path)?
+            } else {
+                FileConfig::default()
+            };
+            let targets = validate_targets(raw.targets)?;
+            if targets.is_empty() {
+                println!("no targets configured");
+            } else {
+                for target in targets {
+                    println!("{}", describe_target_rule(&target));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn install_ui(_cli: &Cli, args: &InstallUiArgs) -> Result<()> {
+    let home = home_dir()?;
+    let bin = env::current_exe().context("resolve current counterspell binary")?;
+
+    if !args.no_swiftbar {
+        let plugin_path = swiftbar_plugin_path(&home);
+        write_swiftbar_plugin(&plugin_path, &bin)?;
+        println!("installed SwiftBar plugin {}", plugin_path.display());
+    }
+
+    if !args.no_herdr_annotation {
+        let launch_agent_path = launch_agent_path(&home);
+        write_launch_agent(&launch_agent_path, &bin, args.interval_secs)?;
+        println!(
+            "installed Herdr annotation LaunchAgent {}",
+            launch_agent_path.display()
+        );
+        if args.load {
+            load_launch_agent(&launch_agent_path)?;
+            println!("loaded {LAUNCH_AGENT_LABEL}");
+        }
+    }
+
     Ok(())
 }
 
@@ -337,7 +644,7 @@ fn annotate_herdr(cli: &Cli) -> Result<()> {
     let now = Utc::now();
     let sessions = discover_recent_sessions(&config, now)?;
     let panes = load_herdr_panes().context("load Herdr panes for annotation")?;
-    let mut annotated = 0usize;
+    let mut annotations = BTreeMap::new();
 
     for session in &sessions {
         let Some(target) = target_for_session(session, &config) else {
@@ -354,9 +661,18 @@ fn annotate_herdr(cli: &Cli) -> Result<()> {
             .unwrap_or_else(|| "watched".to_string());
 
         for pane in matching_panes {
-            annotate_herdr_pane(pane_id(pane), &title, &status)?;
-            annotated += 1;
+            if pane.agent.as_deref() != Some("claude") {
+                continue;
+            }
+            annotations
+                .entry(pane_id(pane).to_string())
+                .or_insert_with(|| (title.clone(), status.clone()));
         }
+    }
+
+    let annotated = annotations.len();
+    for (pane_id, (title, status)) in annotations {
+        annotate_herdr_pane(&pane_id, &title, &status)?;
     }
 
     println!("annotated {annotated} Herdr pane(s)");
@@ -382,14 +698,7 @@ fn annotate_herdr_pane(pane_id: &str, title: &str, status: &str) -> Result<()> {
 }
 
 fn initial_config(args: &InitArgs) -> Result<String> {
-    let selector_count = [
-        args.session_id.is_some(),
-        args.project_pattern.is_some(),
-        args.cwd_pattern.is_some(),
-    ]
-    .into_iter()
-    .filter(|selected| *selected)
-    .count();
+    let selector_count = selector_count(&args.session_id, &args.project_pattern, &args.cwd_pattern);
 
     if args.target_model.is_some() && selector_count != 1 {
         bail!("set exactly one of --session-id, --project-pattern, or --cwd-pattern with --target-model");
@@ -398,33 +707,143 @@ fn initial_config(args: &InitArgs) -> Result<String> {
         bail!("--target-model is required when a target selector is provided");
     }
 
-    let mut config = format!(
-        "recent_hours = {DEFAULT_RECENT_HOURS}\ntranscript_quiet_seconds = {DEFAULT_TRANSCRIPT_QUIET_SECONDS}\ndebounce_seconds = {DEFAULT_DEBOUNCE_SECONDS}\n"
-    );
+    let mut config = default_config_text();
 
     if let Some(target_model) = &args.target_model {
-        config.push_str("\n[[targets]]\n");
-        if let Some(session_id) = &args.session_id {
-            config.push_str(&format!("session_id = \"{}\"\n", escape_toml(session_id)));
-        }
-        if let Some(project_pattern) = &args.project_pattern {
-            config.push_str(&format!(
-                "project_pattern = \"{}\"\n",
-                escape_toml(project_pattern)
-            ));
-        }
-        if let Some(cwd_pattern) = &args.cwd_pattern {
-            config.push_str(&format!("cwd_pattern = \"{}\"\n", escape_toml(cwd_pattern)));
-        }
-        config.push_str(&format!(
-            "target_model = \"{}\"\n",
-            escape_toml(target_model)
-        ));
-    } else {
-        config.push_str("\n# Counterspell is opt-in. Add explicit [[targets]] before arming.\n");
+        let target = target_rule_from_parts(
+            args.session_id.clone(),
+            args.project_pattern.clone(),
+            args.cwd_pattern.clone(),
+            target_model.clone(),
+        )?;
+        config.push_str(&target_to_toml(&target));
     }
 
     Ok(config)
+}
+
+fn default_config_text() -> String {
+    format!(
+        "recent_hours = {DEFAULT_RECENT_HOURS}\ntranscript_quiet_seconds = {DEFAULT_TRANSCRIPT_QUIET_SECONDS}\ndebounce_seconds = {DEFAULT_DEBOUNCE_SECONDS}\n\n# Counterspell is opt-in. Add explicit [[targets]] before arming.\n"
+    )
+}
+
+fn ensure_config_file(path: &Path) -> Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create config dir {}", parent.display()))?;
+    }
+    fs::write(path, default_config_text())
+        .with_context(|| format!("write config {}", path.display()))
+}
+
+fn target_rule_from_parts(
+    session_id: Option<String>,
+    project_pattern: Option<String>,
+    cwd_pattern: Option<String>,
+    target_model: String,
+) -> Result<TargetRule> {
+    if selector_count(&session_id, &project_pattern, &cwd_pattern) != 1 {
+        bail!("set exactly one of --session-id, --project-pattern, or --cwd-pattern");
+    }
+    if target_model.trim().is_empty() {
+        bail!("--target-model cannot be empty");
+    }
+
+    Ok(TargetRule {
+        session_id,
+        project_pattern,
+        cwd_pattern,
+        target_model,
+    })
+}
+
+fn selector_count(
+    session_id: &Option<String>,
+    project_pattern: &Option<String>,
+    cwd_pattern: &Option<String>,
+) -> usize {
+    [
+        session_id.is_some(),
+        project_pattern.is_some(),
+        cwd_pattern.is_some(),
+    ]
+    .into_iter()
+    .filter(|selected| *selected)
+    .count()
+}
+
+fn add_target_to_config(path: &Path, target: &TargetRule) -> Result<bool> {
+    let raw = parse_config_file(path)?;
+    let existing_targets = validate_targets(raw.targets)?;
+    if let Some(existing) = existing_targets
+        .iter()
+        .find(|existing| same_target_selector(existing, target))
+    {
+        if existing.target_model == target.target_model {
+            return Ok(false);
+        }
+        bail!(
+            "target selector already exists with target_model {}; edit {} to change it",
+            existing.target_model,
+            path.display()
+        );
+    }
+
+    let mut raw =
+        fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
+    if !raw.ends_with('\n') {
+        raw.push('\n');
+    }
+    raw.push_str(&target_to_toml(target));
+    fs::write(path, raw).with_context(|| format!("write config {}", path.display()))?;
+    let reparsed = parse_config_file(path)?;
+    validate_targets(reparsed.targets)?;
+    Ok(true)
+}
+
+fn same_target_selector(left: &TargetRule, right: &TargetRule) -> bool {
+    left.session_id == right.session_id
+        && left.project_pattern == right.project_pattern
+        && left.cwd_pattern == right.cwd_pattern
+}
+
+fn target_to_toml(target: &TargetRule) -> String {
+    let mut config = "\n[[targets]]\n".to_string();
+    if let Some(session_id) = &target.session_id {
+        config.push_str(&format!("session_id = \"{}\"\n", escape_toml(session_id)));
+    }
+    if let Some(project_pattern) = &target.project_pattern {
+        config.push_str(&format!(
+            "project_pattern = \"{}\"\n",
+            escape_toml(project_pattern)
+        ));
+    }
+    if let Some(cwd_pattern) = &target.cwd_pattern {
+        config.push_str(&format!("cwd_pattern = \"{}\"\n", escape_toml(cwd_pattern)));
+    }
+    config.push_str(&format!(
+        "target_model = \"{}\"\n",
+        escape_toml(&target.target_model)
+    ));
+    config
+}
+
+fn describe_target_rule(target: &TargetRule) -> String {
+    let selector = if let Some(session_id) = &target.session_id {
+        format!("session_id={session_id}")
+    } else if let Some(project_pattern) = &target.project_pattern {
+        format!("project_pattern={project_pattern}")
+    } else if let Some(cwd_pattern) = &target.cwd_pattern {
+        format!("cwd_pattern={cwd_pattern}")
+    } else {
+        "selector=<invalid>".to_string()
+    };
+    format!("{selector} -> {}", target.target_model)
 }
 
 fn escape_toml(value: &str) -> String {
@@ -506,6 +925,148 @@ fn config_path(config_arg: Option<PathBuf>, home: &Path) -> PathBuf {
         return PathBuf::from(path);
     }
     home.join(".counterspell").join("config.toml")
+}
+
+fn swiftbar_plugin_path(home: &Path) -> PathBuf {
+    home.join("Library")
+        .join("Application Support")
+        .join("SwiftBar")
+        .join("Plugins")
+        .join("counterspell.5m.sh")
+}
+
+fn launch_agent_path(home: &Path) -> PathBuf {
+    home.join("Library")
+        .join("LaunchAgents")
+        .join(format!("{LAUNCH_AGENT_LABEL}.plist"))
+}
+
+fn write_swiftbar_plugin(path: &Path, bin: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create SwiftBar plugin dir {}", parent.display()))?;
+    }
+    let bin_default = shell_param_default(bin);
+    let script = SWIFTBAR_PLUGIN.replace(
+        r#"COUNTERSPELL_BIN="${COUNTERSPELL_BIN:-counterspell}""#,
+        &format!(r#"COUNTERSPELL_BIN="${{COUNTERSPELL_BIN:-{bin_default}}}""#),
+    );
+    fs::write(path, script).with_context(|| format!("write SwiftBar plugin {}", path.display()))?;
+    let mut permissions = fs::metadata(path)
+        .with_context(|| format!("read SwiftBar plugin metadata {}", path.display()))?
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions)
+        .with_context(|| format!("chmod SwiftBar plugin {}", path.display()))?;
+    Ok(())
+}
+
+fn write_launch_agent(path: &Path, bin: &Path, interval_secs: u64) -> Result<()> {
+    if interval_secs == 0 {
+        bail!("--interval-secs must be greater than zero");
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create LaunchAgents dir {}", parent.display()))?;
+    }
+    let home = home_dir()?;
+    let stdout = home
+        .join("Library")
+        .join("Logs")
+        .join("counterspell-annotate-herdr.log");
+    let stderr = home
+        .join("Library")
+        .join("Logs")
+        .join("counterspell-annotate-herdr.err.log");
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{}</string>
+    <string>--annotate-herdr</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>{}</integer>
+  <key>StandardOutPath</key>
+  <string>{}</string>
+  <key>StandardErrorPath</key>
+  <string>{}</string>
+</dict>
+</plist>
+"#,
+        xml_escape(LAUNCH_AGENT_LABEL),
+        xml_escape(&bin.to_string_lossy()),
+        interval_secs,
+        xml_escape(&stdout.to_string_lossy()),
+        xml_escape(&stderr.to_string_lossy())
+    );
+    fs::write(path, plist).with_context(|| format!("write LaunchAgent {}", path.display()))?;
+    Ok(())
+}
+
+fn load_launch_agent(path: &Path) -> Result<()> {
+    let uid_output = ProcessCommand::new("id")
+        .arg("-u")
+        .output()
+        .context("run id -u for launchctl domain")?;
+    if !uid_output.status.success() {
+        bail!("id -u exited with {}", uid_output.status);
+    }
+    let uid = String::from_utf8_lossy(&uid_output.stdout)
+        .trim()
+        .to_string();
+    let domain = format!("gui/{uid}");
+    let _ = ProcessCommand::new("launchctl")
+        .args(["bootout", &domain, &path.to_string_lossy()])
+        .output();
+    let bootstrap = ProcessCommand::new("launchctl")
+        .args(["bootstrap", &domain, &path.to_string_lossy()])
+        .output()
+        .context("run launchctl bootstrap")?;
+    if !bootstrap.status.success() {
+        bail!(
+            "launchctl bootstrap exited with {}: {}",
+            bootstrap.status,
+            String::from_utf8_lossy(&bootstrap.stderr)
+        );
+    }
+    let service = format!("{domain}/{LAUNCH_AGENT_LABEL}");
+    let kickstart = ProcessCommand::new("launchctl")
+        .args(["kickstart", "-k", &service])
+        .output()
+        .context("run launchctl kickstart")?;
+    if !kickstart.status.success() {
+        bail!(
+            "launchctl kickstart exited with {}: {}",
+            kickstart.status,
+            String::from_utf8_lossy(&kickstart.stderr)
+        );
+    }
+    Ok(())
+}
+
+fn shell_param_default(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('$', "\\$")
+        .replace('`', "\\`")
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 fn state_path(state_arg: Option<PathBuf>) -> Result<PathBuf> {
@@ -754,7 +1315,7 @@ fn status_rows(
                 })
                 .unwrap_or_else(|| "ignored".to_string());
             let state = store.sessions.get(&session.session_id);
-            let gate = gate_decision(session, matching_panes.first().copied(), state, config, now);
+            let gate = gate_decision_for_matches(session, &matching_panes, state, config, now);
 
             StatusRow {
                 session_id: short_session(&session.session_id),
@@ -834,10 +1395,12 @@ fn watch_rows(
             .map(|cwd| matching_panes_for_cwd(cwd, panes))
             .unwrap_or_default();
         let state = store.sessions.get(&session.session_id);
-        let pane = matching_panes.first().copied();
-        let plan = remediation_plan(session, pane, state, config, now);
+        let plan = remediation_plan(session, &matching_panes, state, config, now);
         if arm && !plan.actions.is_empty() {
-            let pane = pane.context("eligible remediation plan had no Herdr pane")?;
+            let pane = matching_panes
+                .first()
+                .copied()
+                .context("eligible remediation plan had no Herdr pane")?;
             execute_remediation(pane_id(pane), &plan.actions)?;
             store.sessions.insert(
                 session.session_id.clone(),
@@ -909,13 +1472,13 @@ struct RemediationPlan {
 
 fn remediation_plan(
     session: &TranscriptSession,
-    pane: Option<&HerdrPane>,
+    matching_panes: &[&HerdrPane],
     state: Option<&SessionState>,
     config: &Config,
     now: DateTime<Utc>,
 ) -> RemediationPlan {
     let target = target_for_session(session, config);
-    let gate = gate_decision(session, pane, state, config, now);
+    let gate = gate_decision_for_matches(session, matching_panes, state, config, now);
     let actions = if let Some(target) = target {
         if detect_drift(session, &target.target_model).is_some() && gate.is_allowed() {
             vec![
@@ -1033,9 +1596,9 @@ fn detect_drift(session: &TranscriptSession, desired_model: &str) -> Option<Mode
     Some(ModelDrift { from, to })
 }
 
-fn gate_decision(
+fn gate_decision_for_matches(
     session: &TranscriptSession,
-    pane: Option<&HerdrPane>,
+    matching_panes: &[&HerdrPane],
     state: Option<&SessionState>,
     config: &Config,
     now: DateTime<Utc>,
@@ -1046,14 +1609,15 @@ fn gate_decision(
         blockers.push(GateBlocker::TranscriptActive);
     }
 
-    match pane {
-        Some(pane) if pane.agent_status.as_deref() == Some("idle") => {}
-        Some(pane) => blockers.push(GateBlocker::PaneBusy(
+    match matching_panes {
+        [] => blockers.push(GateBlocker::NoPane),
+        [pane] if pane.agent_status.as_deref() == Some("idle") => {}
+        [pane] => blockers.push(GateBlocker::PaneBusy(
             pane.agent_status
                 .clone()
                 .unwrap_or_else(|| "unknown".to_string()),
         )),
-        None => blockers.push(GateBlocker::NoPane),
+        panes => blockers.push(GateBlocker::AmbiguousPane(panes.len())),
     }
 
     if let Some(last_action_unix) = state.and_then(|state| state.last_action_unix) {
@@ -1120,6 +1684,7 @@ fn describe_gate(gate: &GateDecision) -> String {
         .iter()
         .map(|blocker| match blocker {
             GateBlocker::NoPane => "no-pane".to_string(),
+            GateBlocker::AmbiguousPane(count) => format!("ambiguous-pane:{count}"),
             GateBlocker::TranscriptActive => "transcript-active".to_string(),
             GateBlocker::PaneBusy(state) => format!("pane-{state}"),
             GateBlocker::Debounce => "debounce".to_string(),
@@ -1414,21 +1979,23 @@ mod tests {
         config.transcript_quiet_seconds = 30;
         config.debounce_seconds = 300;
         let pane = idle_pane();
+        let panes = [&pane];
         let quiet_session = test_session(now);
 
-        assert!(gate_decision(&quiet_session, Some(&pane), None, &config, now).is_allowed());
+        assert!(gate_decision_for_matches(&quiet_session, &panes, None, &config, now).is_allowed());
 
         let mut active_session = quiet_session.clone();
         active_session.last_event_at = now - Duration::seconds(5);
         assert_eq!(
-            gate_decision(&active_session, Some(&pane), None, &config, now).blockers,
+            gate_decision_for_matches(&active_session, &panes, None, &config, now).blockers,
             vec![GateBlocker::TranscriptActive]
         );
 
         let mut busy_pane = pane.clone();
         busy_pane.agent_status = Some("working".to_string());
+        let busy_panes = [&busy_pane];
         assert_eq!(
-            gate_decision(&quiet_session, Some(&busy_pane), None, &config, now).blockers,
+            gate_decision_for_matches(&quiet_session, &busy_panes, None, &config, now).blockers,
             vec![GateBlocker::PaneBusy("working".to_string())]
         );
 
@@ -1438,7 +2005,7 @@ mod tests {
             last_action_unix: Some((now - Duration::seconds(60)).timestamp() as u64),
         };
         assert_eq!(
-            gate_decision(&quiet_session, Some(&pane), Some(&state), &config, now).blockers,
+            gate_decision_for_matches(&quiet_session, &panes, Some(&state), &config, now).blockers,
             vec![GateBlocker::Debounce]
         );
     }
@@ -1451,8 +2018,9 @@ mod tests {
         let config = test_config();
         let session = test_session(now);
         let pane = idle_pane();
+        let panes = [&pane];
 
-        let plan = remediation_plan(&session, Some(&pane), None, &config, now);
+        let plan = remediation_plan(&session, &panes, None, &config, now);
 
         assert_eq!(
             plan.actions,
@@ -1464,6 +2032,24 @@ mod tests {
     }
 
     #[test]
+    fn ambiguous_pane_matches_block_remediation() {
+        let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let config = test_config();
+        let session = test_session(now);
+        let left = idle_pane();
+        let mut right = idle_pane();
+        right.pane_id = "pane-2".to_string();
+        let panes = [&left, &right];
+
+        let plan = remediation_plan(&session, &panes, None, &config, now);
+
+        assert_eq!(plan.gate.blockers, vec![GateBlocker::AmbiguousPane(2)]);
+        assert!(plan.actions.is_empty());
+    }
+
+    #[test]
     fn unconfigured_drift_is_observed_but_not_armed() {
         let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
             .unwrap()
@@ -1472,8 +2058,9 @@ mod tests {
         config.targets.clear();
         let session = test_session(now);
         let pane = idle_pane();
+        let panes = [&pane];
 
-        let plan = remediation_plan(&session, Some(&pane), None, &config, now);
+        let plan = remediation_plan(&session, &panes, None, &config, now);
 
         assert!(detect_drift(&session, "claude-fable-5").is_some());
         assert!(plan.actions.is_empty());
