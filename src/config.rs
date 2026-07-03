@@ -37,7 +37,7 @@ pub(crate) fn initial_config(args: &InitArgs) -> Result<String> {
 
 pub(crate) fn default_config_text() -> String {
     format!(
-        "recent_hours = {DEFAULT_RECENT_HOURS}\ntranscript_quiet_seconds = {DEFAULT_TRANSCRIPT_QUIET_SECONDS}\ndebounce_seconds = {DEFAULT_DEBOUNCE_SECONDS}\n\n# Counterspell is opt-in. Add explicit [[targets]] before arming.\n"
+        "recent_hours = {DEFAULT_RECENT_HOURS}\ntranscript_quiet_seconds = {DEFAULT_TRANSCRIPT_QUIET_SECONDS}\ndebounce_seconds = {DEFAULT_DEBOUNCE_SECONDS}\n\n# Fable sessions are watched automatically. Add [[targets]] only for overrides.\n"
     )
 }
 
@@ -278,7 +278,9 @@ fn file_config_to_toml(config: &FileConfig) -> String {
         "debounce_seconds = {}\n\n",
         config.debounce_seconds.unwrap_or(DEFAULT_DEBOUNCE_SECONDS)
     ));
-    raw.push_str("# Counterspell is opt-in. Add explicit [[targets]] before arming.\n");
+    raw.push_str(
+        "# Fable sessions are watched automatically. Add [[targets]] only for overrides.\n",
+    );
 
     for target in &config.targets {
         raw.push_str(&target_to_toml(target));

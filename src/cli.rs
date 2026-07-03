@@ -54,13 +54,13 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Create an opt-in config file.
+    /// Create a config file.
     Init(InitArgs),
     /// Guided local setup for config and indicators.
     Setup(SetupArgs),
     /// Inspect local install, config, Herdr, and indicator state.
     Doctor(DoctorArgs),
-    /// Manage explicit opt-in targets.
+    /// Manage configured target overrides.
     Target(TargetArgs),
     /// Install menu-bar and Herdr annotation indicators.
     InstallUi(InstallUiArgs),
@@ -137,7 +137,7 @@ struct TargetArgs {
 
 #[derive(Debug, Subcommand)]
 enum TargetCommand {
-    /// Add one explicit opt-in target.
+    /// Add one configured target override.
     Add(TargetAddArgs),
     /// List explicit opt-in targets.
     List,
@@ -251,9 +251,7 @@ fn init(cli: &Cli, args: &InitArgs) -> Result<()> {
     fs::write(&path, config).with_context(|| format!("write config {}", path.display()))?;
     println!("wrote {}", path.display());
     if args.target_model.is_none() {
-        println!(
-            "no targets configured; add [[targets]] before `counterspell watch --arm` can act"
-        );
+        println!("Fable sessions are watched automatically; add [[targets]] only for overrides");
     }
     Ok(())
 }

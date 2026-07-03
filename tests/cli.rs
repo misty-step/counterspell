@@ -75,8 +75,7 @@ target_model = "claude-fable-5"
         .stdout(predicate::str::contains("adminifi"))
         .stdout(predicate::str::contains("daybook"))
         .stdout(predicate::str::contains("watched"))
-        .stdout(predicate::str::contains("ignored"))
-        .stdout(predicate::str::contains("no-target"))
+        .stdout(predicate::str::contains("auto:fable"))
         .stdout(predicate::str::contains("w13:p1"))
         .stdout(predicate::str::contains("wN:pB"))
         .stdout(predicate::str::contains("ago"));
@@ -275,7 +274,7 @@ target_model = "claude-fable-5"
 }
 
 #[test]
-fn init_writes_explicit_opt_in_config() {
+fn init_writes_config_target_override() {
     let temp = tempfile::tempdir().expect("tempdir");
     let config = temp.path().join("config.toml");
 
@@ -299,7 +298,7 @@ fn init_writes_explicit_opt_in_config() {
 }
 
 #[test]
-fn target_add_appends_explicit_opt_in_target() {
+fn target_add_appends_configured_target_override() {
     let temp = tempfile::tempdir().expect("tempdir");
     let config = temp.path().join("config.toml");
 
@@ -568,7 +567,7 @@ target_model = "claude-fable-5"
 }
 
 #[test]
-fn watch_ignores_drift_without_explicit_target() {
+fn watch_auto_targets_fable_history_without_explicit_target() {
     let temp = tempfile::tempdir().expect("tempdir");
     let projects = temp.path().join("projects");
     let cwd = temp.path().join("repo");
@@ -604,8 +603,10 @@ fn watch_ignores_drift_without_explicit_target() {
         .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
         .assert()
         .success()
-        .stdout(predicate::str::contains("ignored:no-target"))
-        .stdout(predicate::str::contains("compact then switch").not());
+        .stdout(predicate::str::contains("auto:fable"))
+        .stdout(predicate::str::contains(
+            "compact then switch:claude-fable-5",
+        ));
 }
 
 #[test]
