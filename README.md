@@ -28,7 +28,16 @@ counterspell doctor
 counterspell status
 ```
 
-3. Run the armed watch pass:
+3. Open the local dashboard:
+
+```sh
+counterspell ui
+```
+
+It serves a browser UI on `127.0.0.1`, opens it by default, and refreshes the
+same status rows that `counterspell status` prints.
+
+4. Run the armed watch pass:
 
 ```sh
 counterspell watch --arm
@@ -75,7 +84,18 @@ Selectors are `session_id`, `project_pattern`, or `cwd_pattern`. Patterns
 support `*`. There is no global target model: sessions that do not match a
 target are ignored, even when Counterspell observes model drift.
 
-## Indicator
+## UI And Indicators
+
+For a visible local UI, run:
+
+```sh
+counterspell ui
+```
+
+The dashboard shows whether Counterspell is running, watched vs ignored
+sessions, Herdr pane mapping, target model, current model, drift, and gating
+state. `counterspell ui --no-open` starts the same server without launching a
+browser.
 
 Counterspell ships a SwiftBar/xbar plugin that reads `counterspell status
 --json` and renders a menu-bar dot, watched-session count, and last trigger

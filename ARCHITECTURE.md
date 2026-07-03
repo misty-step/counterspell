@@ -81,7 +81,16 @@ repo/session state, exact next action, and risks in a factual compact handoff.
 This reduces context-loss damage from a model switch and avoids asking the model
 to infer a hidden policy from clever wording.
 
-## Indicator
+## UI And Indicators
+
+`counterspell ui` serves a local browser dashboard from the Rust CLI itself. It
+does not require SwiftBar, xbar, npm, or a separate frontend server. Every page
+load recomputes status from the same boundaries as `counterspell status`:
+configured targets, transcript JSONLs, debounce state, and `herdr pane list`.
+
+The dashboard is an operator surface, not a remediation path. It shows watched
+vs ignored sessions, pane mapping, target model, current model, drift, and the
+gate state that would block or allow an armed watch pass.
 
 `counterspell status --json` emits a summary and row list for external
 indicators. The SwiftBar/xbar plugin in `extras/swiftbar/` uses that JSON to
