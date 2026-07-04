@@ -25,9 +25,12 @@ stay visible as `not-open`. Live Claude panes that have no recent transcript row
 are also shown as `herdr-live-pane` rows so the operator can see what
 Counterspell cannot yet target from transcript state.
 
-If one transcript cwd maps to multiple live panes, the row is visible but armed
-remediation is blocked as `ambiguous-pane:<count>`. Counterspell will not guess
-which pane owns a session.
+If one transcript cwd maps to multiple live panes, Counterspell breaks the tie
+when exactly one of the matching panes is focused (`pane.focused == true`);
+that pane is treated as the owner and the resolution is shown as
+`focused-tiebreak:<pane-id>`. With zero or more than one focused pane, the row
+is still visible but armed remediation is blocked as `ambiguous-pane:<count>`.
+Counterspell will not guess which pane owns a session absent that signal.
 
 Detection is allowed to observe every recent session. Observation alone never
 authorizes remediation.
