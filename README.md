@@ -28,11 +28,16 @@ cargo install --path .
 
 ## Quickstart
 
-1. Run guided setup:
+1. Run guided setup and load the local agents:
 
 ```sh
-counterspell setup --install-ui
+counterspell setup --install-ui --load-ui
 ```
+
+This creates the config if needed, installs the SwiftBar plugin, loads the Herdr
+annotation LaunchAgent, and loads the armed watch LaunchAgent that runs
+`counterspell watch --arm` every 60 seconds. Use `counterspell watch` manually
+only when you want an explicit dry-run.
 
 2. Review discovered sessions and pane mapping:
 
@@ -51,7 +56,7 @@ It serves a browser UI on `127.0.0.1`, opens it by default, and refreshes the
 live Herdr Claude Code panes. Fable sessions are marked active automatically;
 non-Fable sessions stay inactive unless you add a configured target.
 
-4. Run the armed watch pass:
+4. Run a manual armed watch pass when you want to force a pass immediately:
 
 ```sh
 counterspell watch --arm
@@ -121,12 +126,17 @@ Counterspell ships a SwiftBar/xbar plugin that reads `counterspell status
 --json` and renders a menu-bar dot, watched-session count, and last trigger
 event.
 
-Install the menu-bar plugin and a LaunchAgent that periodically annotates Herdr
-panes:
+Install the menu-bar plugin, the Herdr annotation LaunchAgent, and the armed
+watch LaunchAgent:
 
 ```sh
 counterspell install-ui --load
 ```
+
+The armed watch agent uses label `com.misty-step.counterspell.watch-arm`, runs
+every 60 seconds, and logs to `~/Library/Logs/counterspell-watch-arm*`.
+`counterspell doctor` fails if that daemon is not scheduled or if the installed
+binary is older than this checkout's HEAD/latest release baseline.
 
 Or install only the SwiftBar plugin manually:
 
