@@ -63,8 +63,14 @@ This is the safety property the rest of the design protects.
 
 ## Gating
 
-For an auto-targeted or configured session whose latest transcript model differs
-from the target model, `counterspell watch` checks three unattended gates:
+Sessions bind to panes by the Herdr-reported `agent_session` id (the Claude
+integration's SessionStart hook). A pane bound to the session id is
+authoritative; cwd matching is only a fallback, excludes panes bound to a
+different session, and any residual multi-pane ambiguity hard-blocks. Focus
+never routes keystrokes.
+
+For a drifted session on an **idle** pane, `counterspell watch` checks three
+unattended gates:
 
 - transcript quiet: the transcript has not changed inside the quiet window
 - pane idle: Herdr reports the mapped pane as `idle`
@@ -75,14 +81,40 @@ not write debounce state and does not send text to Herdr.
 
 `counterspell watch --arm` executes only plans that pass all gates.
 
+## Fast Path: Act While The Downgraded Turn Is Still Running
+
+Waiting for idle would let a downgraded session finish its whole turn on the
+wrong model. When drift shows on a **working** pane that is bound to the exact
+session id, the armed watch immediately types the `/compact ...` handoff into
+the pane. Claude Code queues composer input submitted mid-turn and executes it
+the moment the turn ends, so the compact lands at the earliest possible
+boundary. The pass records `pending_compact_unix` and later passes report
+`compact-pending` instead of re-queueing.
+
+Once the pane shows idle with a pending compact behind it, the watch sends the
+bare `/model <target_model>` switch — skipping the second compact and skipping
+the transcript-quiet gate (the recent transcript activity is our own compact).
+A bare `/model` on a large uncompacted context pops a cache-rewind
+confirmation dialog in Claude Code; switching only after a compact is what
+keeps the switch dialog-free. A pending compact expires after 30 minutes, and
+the session falls back to the ordinary idle path.
+
+The fast path never fires on `blocked` or `unknown` panes (a blocked pane
+usually means a permission prompt is open — injected text would answer it) and
+never on cwd-fallback matches.
+
 ## Compact Then Switch
 
-The armed action sequence is:
+The armed action sequence on an idle pane is:
 
 1. Send a plain `/compact ...` command to the mapped Herdr pane.
 2. Wait for Herdr to report the pane as `idle`.
 3. Send `/model <target_model>` to the same pane.
 4. Record `last_action_unix` in `~/.counterspell/sessions.json`.
+
+The debounce clock starts at the model switch; a queued fast-path compact is
+tracked by `pending_compact_unix` instead, so the follow-up switch is never
+debounced away.
 
 The compaction prompt uses plain framing deliberately. Before moving a session
 back to the target model, Counterspell asks Claude to preserve the current goal,
