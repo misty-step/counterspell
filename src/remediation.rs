@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 
 use crate::defaults::{COMPACT_COMMAND, COMPACT_WAIT_TIMEOUT_MS, DEFAULT_TARGET_MODEL};
-use crate::herdr::{run_herdr_args, HerdrPane};
+use crate::herdr::{pane_id, run_herdr_args, HerdrPane};
 use crate::model::{
     Config, GateBlocker, GateDecision, ModelDrift, PlannedAction, RemediationPlan, SessionState,
     TargetMatch, TranscriptSession,
@@ -157,6 +157,7 @@ pub(crate) fn gate_decision_for_matches(
     now: DateTime<Utc>,
 ) -> GateDecision {
     let mut blockers = Vec::new();
+    let mut focused_tiebreak = None;
 
     if now - session.last_event_at < Duration::seconds(config.transcript_quiet_seconds as i64) {
         blockers.push(GateBlocker::TranscriptActive);
@@ -170,7 +171,17 @@ pub(crate) fn gate_decision_for_matches(
                 .clone()
                 .unwrap_or_else(|| "unknown".to_string()),
         )),
-        panes => blockers.push(GateBlocker::AmbiguousPane(panes.len())),
+        panes => match sole_focused_pane(panes) {
+            Some(pane) if pane.agent_status.as_deref() == Some("idle") => {
+                focused_tiebreak = Some(pane_id(pane).to_string());
+            }
+            Some(pane) => blockers.push(GateBlocker::PaneBusy(
+                pane.agent_status
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string()),
+            )),
+            None => blockers.push(GateBlocker::AmbiguousPane(panes.len())),
+        },
     }
 
     if let Some(last_action_unix) = state.and_then(|state| state.last_action_unix) {
@@ -181,7 +192,23 @@ pub(crate) fn gate_decision_for_matches(
         }
     }
 
-    GateDecision { blockers }
+    GateDecision {
+        blockers,
+        focused_tiebreak,
+    }
+}
+
+/// Resolves the tiebreak winner among multiple same-cwd pane matches: the
+/// single pane with `focused == true`, if exactly one exists. Zero or more
+/// than one focused pane leaves the ambiguity unresolved.
+fn sole_focused_pane<'a>(panes: &[&'a HerdrPane]) -> Option<&'a HerdrPane> {
+    let mut focused = panes.iter().copied().filter(|pane| pane.focused);
+    let candidate = focused.next()?;
+    if focused.next().is_some() {
+        None
+    } else {
+        Some(candidate)
+    }
 }
 
 pub(crate) fn status_state(panes: &[&HerdrPane], gate: &GateDecision) -> String {
@@ -189,14 +216,20 @@ pub(crate) fn status_state(panes: &[&HerdrPane], gate: &GateDecision) -> String 
         return "not-open".to_string();
     }
     if gate.is_allowed() {
-        return "idle".to_string();
+        return match &gate.focused_tiebreak {
+            Some(pane_id) => format!("idle (focused-tiebreak:{pane_id})"),
+            None => "idle".to_string(),
+        };
     }
     describe_gate(gate)
 }
 
 pub(crate) fn describe_gate(gate: &GateDecision) -> String {
     if gate.is_allowed() {
-        return "allowed".to_string();
+        return match &gate.focused_tiebreak {
+            Some(pane_id) => format!("allowed (focused-tiebreak:{pane_id})"),
+            None => "allowed".to_string(),
+        };
     }
 
     gate.blockers

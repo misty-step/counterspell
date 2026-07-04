@@ -153,6 +153,77 @@ fn ambiguous_pane_matches_block_remediation() {
 }
 
 #[test]
+fn single_focused_pane_breaks_tie_among_multiple_idle_matches() {
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let config = test_config();
+    let session = test_session(now);
+    let mut focused = idle_pane();
+    focused.pane_id = "pane-2".to_string();
+    focused.focused = true;
+    let unfocused = idle_pane();
+    let panes = [&unfocused, &focused];
+
+    let gate = gate_decision_for_matches(&session, &panes, None, &config, now);
+
+    assert!(gate.is_allowed());
+    assert_eq!(gate.focused_tiebreak, Some("pane-2".to_string()));
+    assert_eq!(
+        status_state(&panes, &gate),
+        "idle (focused-tiebreak:pane-2)"
+    );
+    assert_eq!(describe_gate(&gate), "allowed (focused-tiebreak:pane-2)");
+
+    let plan = remediation_plan(&session, &panes, None, &config, now);
+    assert_eq!(
+        plan.actions,
+        vec![
+            PlannedAction::Compact,
+            PlannedAction::SwitchModel("claude-fable-5".to_string())
+        ]
+    );
+}
+
+#[test]
+fn zero_focused_panes_still_hard_blocks_ambiguous_matches() {
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let config = test_config();
+    let session = test_session(now);
+    let left = idle_pane();
+    let mut right = idle_pane();
+    right.pane_id = "pane-2".to_string();
+    let panes = [&left, &right];
+
+    let gate = gate_decision_for_matches(&session, &panes, None, &config, now);
+
+    assert_eq!(gate.blockers, vec![GateBlocker::AmbiguousPane(2)]);
+    assert_eq!(gate.focused_tiebreak, None);
+}
+
+#[test]
+fn multiple_focused_panes_still_hard_blocks_ambiguous_matches() {
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let config = test_config();
+    let session = test_session(now);
+    let mut left = idle_pane();
+    left.focused = true;
+    let mut right = idle_pane();
+    right.pane_id = "pane-2".to_string();
+    right.focused = true;
+    let panes = [&left, &right];
+
+    let gate = gate_decision_for_matches(&session, &panes, None, &config, now);
+
+    assert_eq!(gate.blockers, vec![GateBlocker::AmbiguousPane(2)]);
+    assert_eq!(gate.focused_tiebreak, None);
+}
+
+#[test]
 fn fable_history_is_auto_targeted_without_config() {
     let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
         .unwrap()

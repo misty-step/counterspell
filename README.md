@@ -5,6 +5,23 @@ panes, and automatically keeps Fable Claude Code sessions on Fable.
 
 ## Install
 
+Download a prebuilt macOS binary from the
+[latest release](https://github.com/misty-step/counterspell/releases/latest):
+
+```sh
+curl -LO https://github.com/misty-step/counterspell/releases/latest/download/counterspell-<tag>-aarch64-apple-darwin.tar.gz
+curl -LO https://github.com/misty-step/counterspell/releases/latest/download/counterspell-<tag>-aarch64-apple-darwin.tar.gz.sha256
+shasum -a 256 -c counterspell-<tag>-aarch64-apple-darwin.tar.gz.sha256
+tar xzf counterspell-<tag>-aarch64-apple-darwin.tar.gz
+install counterspell-<tag>-aarch64-apple-darwin/counterspell /usr/local/bin/counterspell
+```
+
+Use the `x86_64-apple-darwin` archive on Intel Macs. Each release tag builds
+both architectures; see [Releases](https://github.com/misty-step/counterspell/releases)
+for exact filenames.
+
+For development, install from source instead:
+
 ```sh
 cargo install --path .
 ```
@@ -133,9 +150,13 @@ a short-lived title/custom status on watched panes. This does not permanently
 rename panes.
 
 If more than one live Herdr pane maps to the same transcript cwd, Counterspell
-shows `ambiguous-pane:<count>` and will not arm remediation for that session.
-Use session-specific targets for visibility, and avoid `watch --arm` until the
-pane mapping is unique.
+resolves the tie to whichever pane is currently focused, when exactly one of
+the matches is focused. `status`/`watch` show
+`focused-tiebreak:<pane-id>` alongside the gate result so the resolution is
+auditable. With zero or more than one focused pane, Counterspell still shows
+`ambiguous-pane:<count>` and will not arm remediation for that session. Use
+session-specific targets for visibility, and avoid `watch --arm` until the
+pane mapping is unique or focus-disambiguated.
 
 ## Scope
 
