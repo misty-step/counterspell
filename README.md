@@ -5,6 +5,23 @@ panes, and automatically keeps Fable Claude Code sessions on Fable.
 
 ## Install
 
+Download a prebuilt macOS binary from the
+[latest release](https://github.com/misty-step/counterspell/releases/latest):
+
+```sh
+curl -LO https://github.com/misty-step/counterspell/releases/latest/download/counterspell-<tag>-aarch64-apple-darwin.tar.gz
+curl -LO https://github.com/misty-step/counterspell/releases/latest/download/counterspell-<tag>-aarch64-apple-darwin.tar.gz.sha256
+shasum -a 256 -c counterspell-<tag>-aarch64-apple-darwin.tar.gz.sha256
+tar xzf counterspell-<tag>-aarch64-apple-darwin.tar.gz
+install counterspell-<tag>-aarch64-apple-darwin/counterspell /usr/local/bin/counterspell
+```
+
+Use the `x86_64-apple-darwin` archive on Intel Macs. Each release tag builds
+both architectures; see [Releases](https://github.com/misty-step/counterspell/releases)
+for exact filenames.
+
+For development, install from source instead:
+
 ```sh
 cargo install --path .
 ```
