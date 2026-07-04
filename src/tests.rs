@@ -1,7 +1,10 @@
 use super::*;
 use crate::config::{parse_config_file, remove_session_target_from_config};
 use crate::dashboard::{build_dashboard_snapshot, render_dashboard_html};
-use crate::herdr::{HerdrTab, HerdrWorkspace};
+use crate::herdr::{
+    matching_panes_for_session, pane_id, pane_session_id, HerdrAgentSession, HerdrTab,
+    HerdrWorkspace,
+};
 use std::io::Write;
 
 fn test_config() -> Config {
@@ -42,7 +45,15 @@ fn idle_pane() -> HerdrPane {
         focused: false,
         title: None,
         custom_status: None,
+        agent_session: None,
     }
+}
+
+fn bound_session(session_id: &str) -> Option<HerdrAgentSession> {
+    Some(HerdrAgentSession {
+        kind: Some("id".to_string()),
+        value: Some(session_id.to_string()),
+    })
 }
 
 #[test]
@@ -153,7 +164,10 @@ fn ambiguous_pane_matches_block_remediation() {
 }
 
 #[test]
-fn single_focused_pane_breaks_tie_among_multiple_idle_matches() {
+fn single_focused_pane_no_longer_breaks_tie_among_multiple_idle_matches() {
+    // Regression: on 2026-07-04 the focused-pane tiebreak routed a
+    // compact+switch for one session into a different live session that
+    // happened to hold focus in the same cwd. Focus must never disambiguate.
     let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
         .unwrap()
         .with_timezone(&Utc);
@@ -167,22 +181,76 @@ fn single_focused_pane_breaks_tie_among_multiple_idle_matches() {
 
     let gate = gate_decision_for_matches(&session, &panes, None, &config, now);
 
-    assert!(gate.is_allowed());
-    assert_eq!(gate.focused_tiebreak, Some("pane-2".to_string()));
-    assert_eq!(
-        status_state(&panes, &gate),
-        "idle (focused-tiebreak:pane-2)"
-    );
-    assert_eq!(describe_gate(&gate), "allowed (focused-tiebreak:pane-2)");
+    assert_eq!(gate.blockers, vec![GateBlocker::AmbiguousPane(2)]);
+    assert_eq!(status_state(&panes, &gate), "ambiguous-pane:2");
+    assert_eq!(describe_gate(&gate), "ambiguous-pane:2");
 
     let plan = remediation_plan(&session, &panes, None, &config, now);
+    assert!(plan.actions.is_empty());
+}
+
+#[test]
+fn session_bound_pane_is_authoritative_over_cwd_matches() {
+    let bound = {
+        let mut pane = idle_pane();
+        pane.pane_id = "pane-2".to_string();
+        pane.agent_session = bound_session("session-1");
+        pane
+    };
+    let unbound = idle_pane();
+    let panes = vec![unbound, bound];
+
+    let matches = matching_panes_for_session("session-1", Some("/repo"), &panes);
+
     assert_eq!(
-        plan.actions,
-        vec![
-            PlannedAction::Compact,
-            PlannedAction::SwitchModel("claude-fable-5".to_string())
-        ]
+        matches.iter().map(|pane| pane_id(pane)).collect::<Vec<_>>(),
+        vec!["pane-2"]
     );
+}
+
+#[test]
+fn cwd_fallback_excludes_panes_bound_to_other_sessions() {
+    let foreign = {
+        let mut pane = idle_pane();
+        pane.pane_id = "pane-2".to_string();
+        pane.agent_session = bound_session("other-session");
+        pane
+    };
+    let unbound = idle_pane();
+    let panes = vec![unbound, foreign];
+
+    let matches = matching_panes_for_session("session-1", Some("/repo"), &panes);
+
+    assert_eq!(
+        matches.iter().map(|pane| pane_id(pane)).collect::<Vec<_>>(),
+        vec!["pane-1"]
+    );
+}
+
+#[test]
+fn all_panes_bound_to_other_sessions_yield_no_match() {
+    let mut foreign = idle_pane();
+    foreign.agent_session = bound_session("other-session");
+    let panes = vec![foreign];
+
+    let matches = matching_panes_for_session("session-1", Some("/repo"), &panes);
+
+    assert!(matches.is_empty());
+}
+
+#[test]
+fn path_kind_agent_session_binds_by_file_stem() {
+    let mut pane = idle_pane();
+    pane.agent_session = Some(HerdrAgentSession {
+        kind: Some("path".to_string()),
+        value: Some("/home/u/.claude/projects/-repo/session-1.jsonl".to_string()),
+    });
+
+    assert_eq!(pane_session_id(&pane), Some("session-1"));
+
+    let panes = vec![pane];
+    let matches = matching_panes_for_session("session-1", None, &panes);
+    assert_eq!(matches.len(), 1);
 }
 
 #[test]
@@ -200,7 +268,6 @@ fn zero_focused_panes_still_hard_blocks_ambiguous_matches() {
     let gate = gate_decision_for_matches(&session, &panes, None, &config, now);
 
     assert_eq!(gate.blockers, vec![GateBlocker::AmbiguousPane(2)]);
-    assert_eq!(gate.focused_tiebreak, None);
 }
 
 #[test]
@@ -220,7 +287,6 @@ fn multiple_focused_panes_still_hard_blocks_ambiguous_matches() {
     let gate = gate_decision_for_matches(&session, &panes, None, &config, now);
 
     assert_eq!(gate.blockers, vec![GateBlocker::AmbiguousPane(2)]);
-    assert_eq!(gate.focused_tiebreak, None);
 }
 
 #[test]

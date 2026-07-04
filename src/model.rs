@@ -136,9 +136,6 @@ pub(crate) enum GateBlocker {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GateDecision {
     pub(crate) blockers: Vec<GateBlocker>,
-    /// Pane id that won an exactly-one-focused-pane tiebreak among multiple
-    /// same-cwd matches. `None` when there was no ambiguity to break.
-    pub(crate) focused_tiebreak: Option<String>,
 }
 
 impl GateDecision {

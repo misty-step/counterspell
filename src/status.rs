@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 
 use crate::feed::FeedEvent;
-use crate::herdr::{matching_panes_for_cwd, pane_id, HerdrPane};
+use crate::herdr::{matching_panes_for_session, pane_id, HerdrPane};
 use crate::model::{Config, SessionState, StatusRow, TranscriptSession, WatchRow, WatchStore};
 use crate::remediation::{
     describe_actions, describe_gate, describe_watch_actions, detect_drift, execute_remediation,
@@ -22,11 +22,8 @@ pub(crate) fn status_rows(
     let mut rows = sessions
         .iter()
         .map(|session| {
-            let matching_panes = session
-                .cwd
-                .as_deref()
-                .map(|cwd| matching_panes_for_cwd(cwd, panes))
-                .unwrap_or_default();
+            let matching_panes =
+                matching_panes_for_session(&session.session_id, session.cwd.as_deref(), panes);
             for pane in &matching_panes {
                 used_panes.insert(pane_id(pane).to_string());
             }
@@ -120,11 +117,8 @@ pub(crate) fn watch_rows(
     let mut feed_events = Vec::new();
 
     for session in sessions {
-        let matching_panes = session
-            .cwd
-            .as_deref()
-            .map(|cwd| matching_panes_for_cwd(cwd, panes))
-            .unwrap_or_default();
+        let matching_panes =
+            matching_panes_for_session(&session.session_id, session.cwd.as_deref(), panes);
         let state: Option<&SessionState> = store.sessions.get(&session.session_id);
         let plan = remediation_plan(session, &matching_panes, state, config, now);
         let target = target_for_session(session, config);
@@ -132,7 +126,7 @@ pub(crate) fn watch_rows(
             .as_ref()
             .and_then(|target| detect_drift(session, &target.target_model));
         let gate = describe_gate(&plan.gate);
-        let pane = event_pane(&matching_panes, &plan.gate.focused_tiebreak);
+        let pane = event_pane(&matching_panes);
 
         if let Some(drift) = &drift {
             feed_events.push(FeedEvent {
@@ -172,17 +166,10 @@ pub(crate) fn watch_rows(
         }
 
         if arm && !plan.actions.is_empty() {
-            let pane = plan
-                .gate
-                .focused_tiebreak
-                .as_deref()
-                .and_then(|winner| {
-                    matching_panes
-                        .iter()
-                        .copied()
-                        .find(|pane| pane_id(pane) == winner)
-                })
-                .or_else(|| matching_panes.first().copied())
+            // The gate only allows a plan when exactly one pane matched.
+            let pane = matching_panes
+                .first()
+                .copied()
                 .context("eligible remediation plan had no Herdr pane")?;
             execute_remediation(pane_id(pane), &plan.actions)?;
             store.sessions.insert(
@@ -290,10 +277,7 @@ fn drift_action_taken(
     }
 }
 
-fn event_pane(panes: &[&HerdrPane], focused_tiebreak: &Option<String>) -> String {
-    if let Some(pane_id) = focused_tiebreak {
-        return pane_id.clone();
-    }
+fn event_pane(panes: &[&HerdrPane]) -> String {
     if panes.is_empty() {
         "not-open".to_string()
     } else {

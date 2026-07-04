@@ -62,6 +62,16 @@ pub(crate) struct HerdrPane {
     pub(crate) focused: bool,
     pub(crate) title: Option<String>,
     pub(crate) custom_status: Option<String>,
+    pub(crate) agent_session: Option<HerdrAgentSession>,
+}
+
+/// Durable session identity an agent reported for its pane via Herdr's
+/// `pane.report_agent_session` (installed by `herdr integration install
+/// claude` as a SessionStart hook).
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct HerdrAgentSession {
+    pub(crate) kind: Option<String>,
+    pub(crate) value: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -189,6 +199,51 @@ pub(crate) fn annotate_herdr_pane(pane_id: &str, title: &str, status: &str) -> R
     ])
     .with_context(|| format!("annotate Herdr pane {pane_id}"))?;
     Ok(())
+}
+
+/// Session id a pane's agent has reported, when present. `kind == "id"`
+/// carries the id directly; `kind == "path"` carries a transcript path whose
+/// file stem is the session id.
+pub(crate) fn pane_session_id(pane: &HerdrPane) -> Option<&str> {
+    let session = pane.agent_session.as_ref()?;
+    let value = session.value.as_deref()?;
+    if value.is_empty() {
+        return None;
+    }
+    match session.kind.as_deref() {
+        Some("path") => std::path::Path::new(value)
+            .file_stem()
+            .and_then(|stem| stem.to_str()),
+        _ => Some(value),
+    }
+}
+
+/// Binds a transcript session to Herdr panes. A pane whose agent reported
+/// this exact session id is authoritative. Only when no pane anywhere claims
+/// the session do we fall back to cwd matching, and even then panes bound to
+/// a *different* session are excluded — two live agents in the same cwd must
+/// never be disambiguated by focus or guesswork (that injected keystrokes
+/// into the wrong session on 2026-07-04).
+pub(crate) fn matching_panes_for_session<'a>(
+    session_id: &str,
+    cwd: Option<&str>,
+    panes: &'a [HerdrPane],
+) -> Vec<&'a HerdrPane> {
+    let mut exact = panes
+        .iter()
+        .filter(|pane| pane_session_id(pane) == Some(session_id))
+        .collect::<Vec<_>>();
+    if !exact.is_empty() {
+        exact.sort_by(|left, right| pane_id(left).cmp(pane_id(right)));
+        return exact;
+    }
+    let Some(cwd) = cwd else {
+        return Vec::new();
+    };
+    matching_panes_for_cwd(cwd, panes)
+        .into_iter()
+        .filter(|pane| pane_session_id(pane).is_none())
+        .collect()
 }
 
 pub(crate) fn matching_panes_for_cwd<'a>(cwd: &str, panes: &'a [HerdrPane]) -> Vec<&'a HerdrPane> {

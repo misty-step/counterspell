@@ -16,7 +16,7 @@ use crate::config::{
 use crate::dashboard;
 use crate::defaults::DEFAULT_TARGET_MODEL;
 use crate::feed::append_feed_events;
-use crate::herdr::{annotate_herdr_pane, load_herdr_panes, matching_panes_for_cwd, pane_id};
+use crate::herdr::{annotate_herdr_pane, load_herdr_panes, matching_panes_for_session, pane_id};
 use crate::indicators::{
     launch_agent_path, launch_agent_scheduled, load_launch_agent, swiftbar_plugin_path,
     watch_arm_launch_agent_path, write_launch_agent, write_swiftbar_plugin,
@@ -611,11 +611,8 @@ fn annotate_herdr(cli: &Cli) -> Result<()> {
         let Some(target) = crate::remediation::target_for_session(session, &config) else {
             continue;
         };
-        let matching_panes = session
-            .cwd
-            .as_deref()
-            .map(|cwd| matching_panes_for_cwd(cwd, &panes))
-            .unwrap_or_default();
+        let matching_panes =
+            matching_panes_for_session(&session.session_id, session.cwd.as_deref(), &panes);
         let title = format!("Counterspell: {}", target.target_model);
         let status = detect_drift(session, &target.target_model)
             .map(|drift| format!("drift {}->{}", drift.from, drift.to))

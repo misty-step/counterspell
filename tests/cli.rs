@@ -733,7 +733,10 @@ target_model = "claude-fable-5"
 }
 
 #[test]
-fn watch_breaks_same_cwd_tie_on_sole_focused_pane() {
+fn watch_blocks_same_cwd_tie_even_with_sole_focused_pane() {
+    // Regression for the 2026-07-04 misfire: the focused-pane tiebreak sent
+    // compact+switch keystrokes into a different live session sharing the
+    // cwd. Focus must never route keystroke injection.
     let temp = tempfile::tempdir().expect("tempdir");
     let projects = temp.path().join("projects");
     let cwd = temp.path().join("repo");
@@ -780,10 +783,91 @@ target_model = "claude-fable-5"
         .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
         .assert()
         .success()
-        .stdout(predicate::str::contains("focused-tiebreak:w13:p2"))
+        .stdout(predicate::str::contains("ambiguous-pane:2"))
+        .stdout(predicate::str::contains("compact then switch").not());
+}
+
+#[test]
+fn watch_routes_remediation_to_session_bound_pane_among_same_cwd_matches() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let cwd = temp.path().join("repo");
+    fs::create_dir_all(&cwd).expect("cwd");
+    write_transcript_with_models(
+        &projects,
+        "-Users-phaedrus-Development-adminifi",
+        "adminifi-session",
+        &cwd,
+        &["claude-fable-5", "claude-opus-4-8"],
+    );
+    let config = write_config(
+        temp.path(),
+        r#"
+[[targets]]
+session_id = "adminifi-session"
+target_model = "claude-fable-5"
+"#,
+    );
+    let state = temp.path().join("state.json");
+    let (fake_herdr, fixture) = fake_herdr_with_sessions(
+        temp.path(),
+        &[
+            // The other pane is focused AND bound to a different session:
+            // under the old cwd+focus matching it would have received the
+            // keystrokes. Session binding must route to w13:p1.
+            (
+                "w13:p1",
+                &cwd,
+                "claude",
+                "idle",
+                true,
+                Some("adminifi-session"),
+            ),
+            (
+                "w13:p2",
+                &cwd,
+                "claude",
+                "idle",
+                false,
+                Some("other-session"),
+            ),
+        ],
+    );
+    let herdr_log = temp.path().join("herdr.log");
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("--recent-hours")
+        .arg("999")
+        .arg("watch")
+        .arg("--arm")
+        .env("HOME", temp.path())
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .env("COUNTERSPELL_HERDR_LOG", &herdr_log)
+        .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
+        .assert()
+        .success()
         .stdout(predicate::str::contains(
             "compact then switch:claude-fable-5",
         ));
+
+    let log = fs::read_to_string(&herdr_log).expect("herdr log");
+    assert!(
+        log.lines().any(|line| line.contains("w13:p1")),
+        "remediation should target the session-bound pane, log: {log}"
+    );
+    assert!(
+        !log.lines()
+            .any(|line| line.starts_with("pane run w13:p2") || line.contains("run w13:p2")),
+        "remediation must not touch the foreign-bound pane, log: {log}"
+    );
 }
 
 #[test]
@@ -1364,6 +1448,64 @@ fn fake_herdr_with_focus(
                 "label": label,
                 "focused": focused
             })
+        })
+        .collect::<Vec<_>>();
+    let herdr_json = serde_json::json!({
+        "id": "cli:pane:list",
+        "result": {
+            "type": "pane_list",
+            "panes": panes
+        }
+    });
+    fs::write(&fixture, herdr_json.to_string()).expect("fixture");
+
+    let fake_herdr = temp_path.join("fake-herdr");
+    fs::write(
+        &fake_herdr,
+        r#"#!/bin/sh
+if [ "$1" = "pane" ] && [ "$2" = "list" ]; then
+  cat "$COUNTERSPELL_HERDR_FIXTURE"
+  exit 0
+fi
+if [ -n "$COUNTERSPELL_HERDR_LOG" ]; then
+  printf '%s\n' "$*" >> "$COUNTERSPELL_HERDR_LOG"
+fi
+exit 0
+"#,
+    )
+    .expect("fake herdr");
+    chmod_exec(&fake_herdr);
+    (fake_herdr, fixture)
+}
+
+/// (pane_id, cwd, agent, agent_status, focused, reported session id)
+type SessionPaneFixture<'a> = (&'a str, &'a Path, &'a str, &'a str, bool, Option<&'a str>);
+
+fn fake_herdr_with_sessions(
+    temp_path: &Path,
+    panes: &[SessionPaneFixture<'_>],
+) -> (PathBuf, PathBuf) {
+    let fixture = temp_path.join("herdr.json");
+    let panes = panes
+        .iter()
+        .map(|(pane_id, cwd, agent, status, focused, session_id)| {
+            let mut pane = serde_json::json!({
+                "pane_id": pane_id,
+                "cwd": cwd,
+                "foreground_cwd": cwd,
+                "agent": agent,
+                "agent_status": status,
+                "focused": focused
+            });
+            if let Some(session_id) = session_id {
+                pane["agent_session"] = serde_json::json!({
+                    "source": "herdr:claude",
+                    "agent": agent,
+                    "kind": "id",
+                    "value": session_id
+                });
+            }
+            pane
         })
         .collect::<Vec<_>>();
     let herdr_json = serde_json::json!({
