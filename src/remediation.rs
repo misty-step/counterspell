@@ -68,6 +68,13 @@ pub(crate) fn target_for_session(
     session: &TranscriptSession,
     config: &Config,
 ) -> Option<TargetMatch> {
+    if has_auto_fable_history(session) {
+        return Some(TargetMatch {
+            target_model: DEFAULT_TARGET_MODEL.to_string(),
+            reason: AUTO_FABLE_REASON.to_string(),
+        });
+    }
+
     for target in &config.targets {
         if target
             .session_id
@@ -105,13 +112,6 @@ pub(crate) fn target_for_session(
         }
     }
 
-    if has_auto_fable_history(session) {
-        return Some(TargetMatch {
-            target_model: DEFAULT_TARGET_MODEL.to_string(),
-            reason: AUTO_FABLE_REASON.to_string(),
-        });
-    }
-
     None
 }
 
@@ -122,8 +122,8 @@ pub(crate) fn has_auto_fable_history(session: &TranscriptSession) -> bool {
         .any(|model| model == DEFAULT_TARGET_MODEL)
 }
 
-pub(crate) fn is_auto_fable_target(session: &TranscriptSession, target: &TargetMatch) -> bool {
-    target.target_model == DEFAULT_TARGET_MODEL && has_auto_fable_history(session)
+pub(crate) fn is_auto_fable_target(target: &TargetMatch) -> bool {
+    target.reason == AUTO_FABLE_REASON
 }
 
 pub(crate) fn format_target_match(target: &TargetMatch) -> String {

@@ -4,7 +4,7 @@ Counterspell is a small Rust CLI around three boundaries:
 
 - Claude transcript JSONL files under `~/.claude/projects/*/*.jsonl`
 - live Herdr pane state from `herdr pane list`
-- optional target overrides in `~/.counterspell/config.toml`
+- optional extra targets in `~/.counterspell/config.toml`
 
 It has one built-in target model, `claude-fable-5`, and no background daemon.
 Every run recomputes state from those boundaries.
@@ -39,7 +39,7 @@ transcript model history includes `claude-fable-5`. The match is history-based,
 not latest-model-only, so a session remains watched after it drifts from Fable
 to another model.
 
-Config entries under `[[targets]]` are optional overrides and extra coverage:
+Config entries under `[[targets]]` are optional extra coverage:
 
 ```toml
 [[targets]]
@@ -53,9 +53,10 @@ Each target has exactly one selector:
 - `project_pattern`
 - `cwd_pattern`
 
-and exactly one `target_model`. Sessions that have never run Fable and do not
-match a configured target are ignored, including deliberate Sonnet or Opus
-sessions. This is the safety property the rest of the design protects.
+and exactly one `target_model`. The automatic Fable target takes precedence over
+configured targets. Sessions that have never run Fable and do not match a
+configured target are ignored, including deliberate Sonnet or Opus sessions.
+This is the safety property the rest of the design protects.
 
 ## Gating
 
@@ -90,7 +91,7 @@ to infer a hidden policy from clever wording.
 
 `counterspell ui` serves a local Herdr control panel from the Rust CLI itself.
 It does not require SwiftBar, xbar, npm, or a separate frontend server. Every
-page load recomputes state from automatic Fable targets, config overrides,
+page load recomputes state from automatic Fable targets, configured targets,
 transcript JSONLs, and
 Herdr workspace/tab/pane lists.
 

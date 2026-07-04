@@ -60,7 +60,7 @@ enum Commands {
     Setup(SetupArgs),
     /// Inspect local install, config, Herdr, and indicator state.
     Doctor(DoctorArgs),
-    /// Manage configured target overrides.
+    /// Manage configured targets for extra coverage.
     Target(TargetArgs),
     /// Install menu-bar and Herdr annotation indicators.
     InstallUi(InstallUiArgs),
@@ -137,7 +137,7 @@ struct TargetArgs {
 
 #[derive(Debug, Subcommand)]
 enum TargetCommand {
-    /// Add one configured target override.
+    /// Add one configured target for extra coverage.
     Add(TargetAddArgs),
     /// List explicit opt-in targets.
     List,

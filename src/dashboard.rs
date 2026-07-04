@@ -139,9 +139,7 @@ pub(crate) fn build_dashboard_snapshot(
                 .map(|session| {
                     let target = target_for_session(session, config);
                     let enabled = target.is_some();
-                    let auto_target = target
-                        .as_ref()
-                        .is_some_and(|target| is_auto_fable_target(session, target));
+                    let auto_target = target.as_ref().is_some_and(is_auto_fable_target);
                     ClaudeSessionView {
                         session_id: session.session_id.clone(),
                         short_session_id: short_session(&session.session_id),
