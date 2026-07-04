@@ -389,7 +389,9 @@ fn setup_can_create_config_target_and_ui_files() {
     let watch_agent_text = fs::read_to_string(watch_agent).expect("watch agent");
     assert!(watch_agent_text.contains("watch"));
     assert!(watch_agent_text.contains("--arm"));
-    assert!(watch_agent_text.contains("<integer>60</integer>"));
+    // The armed watch runs on a tight interval so downgrades are answered
+    // while the downgraded turn is still running.
+    assert!(watch_agent_text.contains("<integer>10</integer>"));
 }
 
 #[test]
@@ -785,6 +787,113 @@ target_model = "claude-fable-5"
         .success()
         .stdout(predicate::str::contains("ambiguous-pane:2"))
         .stdout(predicate::str::contains("compact then switch").not());
+}
+
+#[test]
+fn watch_fast_path_queues_compact_while_working_then_switches_on_idle() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let cwd = temp.path().join("repo");
+    fs::create_dir_all(&cwd).expect("cwd");
+    write_transcript_with_models(
+        &projects,
+        "-Users-phaedrus-Development-adminifi",
+        "adminifi-session",
+        &cwd,
+        &["claude-fable-5", "claude-opus-4-8"],
+    );
+    let config = write_config(
+        temp.path(),
+        r#"
+[[targets]]
+session_id = "adminifi-session"
+target_model = "claude-fable-5"
+"#,
+    );
+    let state = temp.path().join("state.json");
+    let herdr_log = temp.path().join("herdr.log");
+
+    // Pass 1: the downgraded session's pane is WORKING. The fast path must
+    // queue the compact immediately instead of waiting for idle.
+    let (fake_herdr, fixture) = fake_herdr_with_sessions(
+        temp.path(),
+        &[(
+            "w13:p1",
+            &cwd,
+            "claude",
+            "working",
+            false,
+            Some("adminifi-session"),
+        )],
+    );
+    let run = |desc: &str| {
+        let assert = Command::cargo_bin("counterspell")
+            .expect("binary")
+            .arg("--projects-dir")
+            .arg(&projects)
+            .arg("--config")
+            .arg(&config)
+            .arg("--state")
+            .arg(&state)
+            .arg("--recent-hours")
+            .arg("999")
+            .arg("watch")
+            .arg("--arm")
+            .env("HOME", temp.path())
+            .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+            .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+            .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
+            .env("COUNTERSPELL_HERDR_LOG", &herdr_log)
+            .assert()
+            .success();
+        eprintln!("--- pass: {desc}");
+        assert
+    };
+
+    run("working pane").stdout(predicate::str::contains("queue-compact"));
+    let log = fs::read_to_string(&herdr_log).expect("herdr log");
+    assert!(
+        log.contains("pane run w13:p1 /compact"),
+        "compact should be queued into the working pane, log: {log}"
+    );
+    assert!(
+        !log.contains("/model"),
+        "no switch while the compact is pending, log: {log}"
+    );
+
+    // Pass 2: still working (compact queued, turn not finished) — no re-queue.
+    run("still working").stdout(predicate::str::contains("compact-pending"));
+    let log = fs::read_to_string(&herdr_log).expect("herdr log");
+    assert_eq!(
+        log.matches("/compact").count(),
+        1,
+        "compact must not be re-queued, log: {log}"
+    );
+
+    // Pass 3: pane idle (turn ended, queued compact ran) — bare switch, no
+    // second compact.
+    fake_herdr_with_sessions(
+        temp.path(),
+        &[(
+            "w13:p1",
+            &cwd,
+            "claude",
+            "idle",
+            false,
+            Some("adminifi-session"),
+        )],
+    );
+    run("idle after compact").stdout(predicate::str::contains("switch:claude-fable-5"));
+    let log = fs::read_to_string(&herdr_log).expect("herdr log");
+    assert!(
+        log.contains("pane run w13:p1 /model claude-fable-5"),
+        "switch should reach the bound pane, log: {log}"
+    );
+    assert_eq!(
+        log.matches("/compact").count(),
+        1,
+        "the idle pass must not compact again, log: {log}"
+    );
 }
 
 #[test]

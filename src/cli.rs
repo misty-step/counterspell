@@ -184,9 +184,14 @@ struct InstallUiArgs {
     #[arg(long)]
     load: bool,
 
-    /// LaunchAgent interval in seconds.
+    /// LaunchAgent interval in seconds (Herdr annotation agent).
     #[arg(long, value_name = "SECONDS", default_value_t = 60)]
     interval_secs: u64,
+
+    /// Armed watch LaunchAgent interval in seconds. Kept tight so a
+    /// downgrade is answered while the downgraded turn is still running.
+    #[arg(long, value_name = "SECONDS", default_value_t = 10)]
+    watch_interval_secs: u64,
 }
 
 #[derive(Debug, Args)]
@@ -300,6 +305,7 @@ fn setup(cli: &Cli, args: &SetupArgs) -> Result<()> {
             no_watch_arm: false,
             load: args.load_ui,
             interval_secs: 60,
+            watch_interval_secs: 10,
         })?;
     }
 
@@ -546,7 +552,7 @@ fn install_ui(args: &InstallUiArgs) -> Result<()> {
 
     if !args.no_watch_arm {
         let watch_arm_path = watch_arm_launch_agent_path(&home);
-        write_watch_arm_launch_agent(&watch_arm_path, &bin, args.interval_secs)?;
+        write_watch_arm_launch_agent(&watch_arm_path, &bin, args.watch_interval_secs)?;
         println!(
             "installed watch-arm LaunchAgent {}",
             watch_arm_path.display()

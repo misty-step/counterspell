@@ -117,6 +117,7 @@ fn unattended_gate_requires_quiet_transcript_idle_pane_and_debounce() {
         session_id: "session-1".to_string(),
         cwd: Some("/repo".to_string()),
         last_action_unix: Some((now - Duration::seconds(60)).timestamp() as u64),
+        pending_compact_unix: None,
     };
     assert_eq!(
         gate_decision_for_matches(&quiet_session, &panes, Some(&state), &config, now).blockers,
@@ -187,6 +188,167 @@ fn single_focused_pane_no_longer_breaks_tie_among_multiple_idle_matches() {
 
     let plan = remediation_plan(&session, &panes, None, &config, now);
     assert!(plan.actions.is_empty());
+}
+
+fn fast_path_state(now: DateTime<Utc>, pending_secs_ago: i64) -> SessionState {
+    SessionState {
+        session_id: "session-1".to_string(),
+        cwd: Some("/repo".to_string()),
+        last_action_unix: None,
+        pending_compact_unix: Some((now - Duration::seconds(pending_secs_ago)).timestamp() as u64),
+    }
+}
+
+#[test]
+fn drift_on_working_session_bound_pane_queues_compact_immediately() {
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let config = test_config();
+    // Transcript still streaming — fast path must not care.
+    let mut session = test_session(now);
+    session.last_event_at = now - Duration::seconds(2);
+    let mut pane = idle_pane();
+    pane.agent_status = Some("working".to_string());
+    pane.agent_session = bound_session("session-1");
+    let panes = [&pane];
+
+    let plan = remediation_plan(&session, &panes, None, &config, now);
+
+    assert!(plan.gate.is_allowed());
+    assert_eq!(plan.actions, vec![PlannedAction::QueueCompact]);
+}
+
+#[test]
+fn working_pane_with_pending_compact_blocks_requeue() {
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let config = test_config();
+    let session = test_session(now);
+    let mut pane = idle_pane();
+    pane.agent_status = Some("working".to_string());
+    pane.agent_session = bound_session("session-1");
+    let panes = [&pane];
+    let state = fast_path_state(now, 60);
+
+    let plan = remediation_plan(&session, &panes, Some(&state), &config, now);
+
+    assert_eq!(plan.gate.blockers, vec![GateBlocker::CompactPending]);
+    assert!(plan.actions.is_empty());
+}
+
+#[test]
+fn idle_pane_with_pending_compact_switches_without_recompacting() {
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let config = test_config();
+    // Transcript active from our own compact — must not block the switch.
+    let mut session = test_session(now);
+    session.last_event_at = now - Duration::seconds(3);
+    let mut pane = idle_pane();
+    pane.agent_session = bound_session("session-1");
+    let panes = [&pane];
+    let state = fast_path_state(now, 90);
+
+    let plan = remediation_plan(&session, &panes, Some(&state), &config, now);
+
+    assert!(plan.gate.is_allowed());
+    assert_eq!(
+        plan.actions,
+        vec![PlannedAction::SwitchModel("claude-fable-5".to_string())]
+    );
+}
+
+#[test]
+fn expired_pending_compact_falls_back_to_full_remediation() {
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let config = test_config();
+    let session = test_session(now);
+    let mut pane = idle_pane();
+    pane.agent_session = bound_session("session-1");
+    let panes = [&pane];
+    let state = fast_path_state(now, 3600);
+
+    let plan = remediation_plan(&session, &panes, Some(&state), &config, now);
+
+    assert_eq!(
+        plan.actions,
+        vec![
+            PlannedAction::Compact,
+            PlannedAction::SwitchModel("claude-fable-5".to_string())
+        ]
+    );
+}
+
+#[test]
+fn working_pane_without_session_binding_never_gets_fast_path() {
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let config = test_config();
+    let session = test_session(now);
+    let mut pane = idle_pane();
+    pane.agent_status = Some("working".to_string());
+    let panes = [&pane];
+
+    let plan = remediation_plan(&session, &panes, None, &config, now);
+
+    assert!(plan.actions.is_empty());
+    assert!(plan
+        .gate
+        .blockers
+        .contains(&GateBlocker::PaneBusy("working".to_string())));
+}
+
+#[test]
+fn blocked_pane_never_gets_fast_path_even_when_session_bound() {
+    // "blocked" usually means a permission prompt is open — injected text
+    // would answer the prompt.
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let config = test_config();
+    let session = test_session(now);
+    let mut pane = idle_pane();
+    pane.agent_status = Some("blocked".to_string());
+    pane.agent_session = bound_session("session-1");
+    let panes = [&pane];
+
+    let plan = remediation_plan(&session, &panes, None, &config, now);
+
+    assert!(plan.actions.is_empty());
+    assert!(plan
+        .gate
+        .blockers
+        .contains(&GateBlocker::PaneBusy("blocked".to_string())));
+}
+
+#[test]
+fn debounced_working_pane_does_not_queue_compact() {
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let config = test_config();
+    let session = test_session(now);
+    let mut pane = idle_pane();
+    pane.agent_status = Some("working".to_string());
+    pane.agent_session = bound_session("session-1");
+    let panes = [&pane];
+    let state = SessionState {
+        session_id: "session-1".to_string(),
+        cwd: Some("/repo".to_string()),
+        last_action_unix: Some((now - Duration::seconds(60)).timestamp() as u64),
+        pending_compact_unix: None,
+    };
+
+    let plan = remediation_plan(&session, &panes, Some(&state), &config, now);
+
+    assert!(plan.actions.is_empty());
+    assert!(plan.gate.blockers.contains(&GateBlocker::Debounce));
 }
 
 #[test]

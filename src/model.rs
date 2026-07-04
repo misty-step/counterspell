@@ -58,6 +58,11 @@ pub(crate) struct SessionState {
     pub(crate) session_id: String,
     pub(crate) cwd: Option<String>,
     pub(crate) last_action_unix: Option<u64>,
+    /// Set when a `/compact` was queued into a still-working pane (fast
+    /// path). The follow-up pass sends the bare model switch once the pane
+    /// is idle, then clears this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pending_compact_unix: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +126,10 @@ pub(crate) struct ModelDrift {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PlannedAction {
     Compact,
+    /// Fast path: type the compact command into a still-working pane. It
+    /// queues in the composer and executes the moment the current turn
+    /// ends. No wait, no follow-up switch in the same pass.
+    QueueCompact,
     SwitchModel(String),
 }
 
@@ -131,6 +140,8 @@ pub(crate) enum GateBlocker {
     TranscriptActive,
     PaneBusy(String),
     Debounce,
+    /// A fast-path compact is queued in the pane and has not completed yet.
+    CompactPending,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

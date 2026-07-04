@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 
-use crate::defaults::{COMPACT_COMMAND, COMPACT_WAIT_TIMEOUT_MS, DEFAULT_TARGET_MODEL};
-use crate::herdr::{run_herdr_args, HerdrPane};
+use crate::defaults::{
+    COMPACT_COMMAND, COMPACT_WAIT_TIMEOUT_MS, DEFAULT_TARGET_MODEL, PENDING_COMPACT_EXPIRY_SECONDS,
+};
+use crate::herdr::{pane_session_id, run_herdr_args, HerdrPane};
 use crate::model::{
     Config, GateBlocker, GateDecision, ModelDrift, PlannedAction, RemediationPlan, SessionState,
     TargetMatch, TranscriptSession,
@@ -28,6 +30,11 @@ pub(crate) fn execute_remediation(pane_id: &str, actions: &[PlannedAction]) -> R
                 ])
                 .with_context(|| format!("wait for compact to finish in Herdr pane {pane_id}"))?;
             }
+            PlannedAction::QueueCompact => {
+                run_herdr_args(&["pane", "run", pane_id, COMPACT_COMMAND]).with_context(|| {
+                    format!("queue compact command into working Herdr pane {pane_id}")
+                })?;
+            }
             PlannedAction::SwitchModel(model) => {
                 let command = format!("/model {model}");
                 run_herdr_args(&["pane", "run", pane_id, command.as_str()])
@@ -47,9 +54,57 @@ pub(crate) fn remediation_plan(
     now: DateTime<Utc>,
 ) -> RemediationPlan {
     let target = target_for_session(session, config);
+    let drift = target
+        .as_ref()
+        .and_then(|target| detect_drift(session, &target.target_model));
+
+    // Fast path: a downgraded session should not wait for idle. The moment
+    // drift shows on a working pane we queue /compact into the composer (it
+    // executes when the current turn ends); once the pane is idle with the
+    // compact behind it, the bare /model switch goes through without the
+    // cache-rewind confirmation dialog. Both steps require the pane to be
+    // bound to this exact session id — never a cwd guess.
+    if let (Some(target), Some(_)) = (&target, &drift) {
+        if let [pane] = matching_panes {
+            if pane_session_id(pane) == Some(session.session_id.as_str()) {
+                let pending = has_pending_compact(state, now);
+                match pane.agent_status.as_deref() {
+                    Some("working") if pending => {
+                        return RemediationPlan {
+                            gate: GateDecision {
+                                blockers: vec![GateBlocker::CompactPending],
+                            },
+                            actions: Vec::new(),
+                        };
+                    }
+                    Some("working") if !is_debounced(state, config, now) => {
+                        return RemediationPlan {
+                            gate: GateDecision {
+                                blockers: Vec::new(),
+                            },
+                            actions: vec![PlannedAction::QueueCompact],
+                        };
+                    }
+                    Some("idle") if pending => {
+                        // The queued compact already ran; finish with the
+                        // switch regardless of transcript freshness — the
+                        // recent transcript activity is our own compact.
+                        return RemediationPlan {
+                            gate: GateDecision {
+                                blockers: Vec::new(),
+                            },
+                            actions: vec![PlannedAction::SwitchModel(target.target_model.clone())],
+                        };
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     let gate = gate_decision_for_matches(session, matching_panes, state, config, now);
     let actions = if let Some(target) = target {
-        if detect_drift(session, &target.target_model).is_some() && gate.is_allowed() {
+        if drift.is_some() && gate.is_allowed() {
             vec![
                 PlannedAction::Compact,
                 PlannedAction::SwitchModel(target.target_model),
@@ -62,6 +117,24 @@ pub(crate) fn remediation_plan(
     };
 
     RemediationPlan { gate, actions }
+}
+
+fn has_pending_compact(state: Option<&SessionState>, now: DateTime<Utc>) -> bool {
+    state
+        .and_then(|state| state.pending_compact_unix)
+        .and_then(unix_to_utc)
+        .is_some_and(|queued_at| {
+            now - queued_at < Duration::seconds(PENDING_COMPACT_EXPIRY_SECONDS as i64)
+        })
+}
+
+fn is_debounced(state: Option<&SessionState>, config: &Config, now: DateTime<Utc>) -> bool {
+    state
+        .and_then(|state| state.last_action_unix)
+        .and_then(unix_to_utc)
+        .is_some_and(|last_action_at| {
+            now - last_action_at < Duration::seconds(config.debounce_seconds as i64)
+        })
 }
 
 pub(crate) fn target_for_session(
@@ -176,12 +249,8 @@ pub(crate) fn gate_decision_for_matches(
         panes => blockers.push(GateBlocker::AmbiguousPane(panes.len())),
     }
 
-    if let Some(last_action_unix) = state.and_then(|state| state.last_action_unix) {
-        if let Some(last_action_at) = unix_to_utc(last_action_unix) {
-            if now - last_action_at < Duration::seconds(config.debounce_seconds as i64) {
-                blockers.push(GateBlocker::Debounce);
-            }
-        }
+    if is_debounced(state, config, now) {
+        blockers.push(GateBlocker::Debounce);
     }
 
     GateDecision { blockers }
@@ -210,6 +279,7 @@ pub(crate) fn describe_gate(gate: &GateDecision) -> String {
             GateBlocker::TranscriptActive => "transcript-active".to_string(),
             GateBlocker::PaneBusy(state) => format!("pane-{state}"),
             GateBlocker::Debounce => "debounce".to_string(),
+            GateBlocker::CompactPending => "compact-pending".to_string(),
         })
         .collect::<Vec<_>>()
         .join(",")
@@ -224,6 +294,7 @@ pub(crate) fn describe_actions(actions: &[PlannedAction]) -> String {
         .iter()
         .map(|action| match action {
             PlannedAction::Compact => "compact".to_string(),
+            PlannedAction::QueueCompact => "queue-compact".to_string(),
             PlannedAction::SwitchModel(model) => format!("switch:{model}"),
         })
         .collect::<Vec<_>>()

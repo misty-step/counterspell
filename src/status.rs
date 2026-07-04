@@ -120,6 +120,8 @@ pub(crate) fn watch_rows(
         let matching_panes =
             matching_panes_for_session(&session.session_id, session.cwd.as_deref(), panes);
         let state: Option<&SessionState> = store.sessions.get(&session.session_id);
+        let prior_last_action_unix = state.and_then(|state| state.last_action_unix);
+        let prior_pending_compact_unix = state.and_then(|state| state.pending_compact_unix);
         let plan = remediation_plan(session, &matching_panes, state, config, now);
         let target = target_for_session(session, config);
         let drift = target
@@ -172,12 +174,35 @@ pub(crate) fn watch_rows(
                 .copied()
                 .context("eligible remediation plan had no Herdr pane")?;
             execute_remediation(pane_id(pane), &plan.actions)?;
+            let now_unix: u64 = now.timestamp().try_into().unwrap_or(0);
+            let queued_compact = plan
+                .actions
+                .contains(&crate::model::PlannedAction::QueueCompact);
+            let switched = plan
+                .actions
+                .iter()
+                .any(|action| matches!(action, crate::model::PlannedAction::SwitchModel(_)));
             store.sessions.insert(
                 session.session_id.clone(),
                 SessionState {
                     session_id: session.session_id.clone(),
                     cwd: session.cwd.clone(),
-                    last_action_unix: Some(now.timestamp().try_into().unwrap_or(0)),
+                    // The debounce clock starts at the model switch — a
+                    // queued fast-path compact is tracked by
+                    // pending_compact_unix instead so the follow-up switch
+                    // is not debounced away.
+                    last_action_unix: if switched {
+                        Some(now_unix)
+                    } else {
+                        prior_last_action_unix
+                    },
+                    pending_compact_unix: if switched {
+                        None
+                    } else if queued_compact {
+                        Some(now_unix)
+                    } else {
+                        prior_pending_compact_unix
+                    },
                 },
             );
             store_changed = true;
@@ -191,12 +216,18 @@ pub(crate) fn watch_rows(
                         gate: gate.clone(),
                         action: match action {
                             crate::model::PlannedAction::Compact => "compact_sent".to_string(),
+                            crate::model::PlannedAction::QueueCompact => {
+                                "compact_queued".to_string()
+                            }
                             crate::model::PlannedAction::SwitchModel(_) => {
                                 "model_switched".to_string()
                             }
                         },
                         action_taken: match action {
                             crate::model::PlannedAction::Compact => "compact_sent".to_string(),
+                            crate::model::PlannedAction::QueueCompact => {
+                                "compact_queued".to_string()
+                            }
                             crate::model::PlannedAction::SwitchModel(model) => {
                                 format!("model_switched:{model}")
                             }
@@ -214,26 +245,28 @@ pub(crate) fn watch_rows(
                             .to_string(),
                     });
                 }
-                feed_events.push(FeedEvent {
-                    session_id: session.session_id.clone(),
-                    pane: pane_id(pane).to_string(),
-                    from_model: drift.from.clone(),
-                    to_model: drift.to.clone(),
-                    gate: gate.clone(),
-                    action: "remediation_confirmed".to_string(),
-                    action_taken: "confirmed".to_string(),
-                    origin: target
-                        .as_ref()
-                        .map(|target| {
-                            if is_auto_fable_target(target) {
-                                "downgraded-from-fable"
-                            } else {
-                                "configured-target-drift"
-                            }
-                        })
-                        .unwrap_or("unknown")
-                        .to_string(),
-                });
+                if switched {
+                    feed_events.push(FeedEvent {
+                        session_id: session.session_id.clone(),
+                        pane: pane_id(pane).to_string(),
+                        from_model: drift.from.clone(),
+                        to_model: drift.to.clone(),
+                        gate: gate.clone(),
+                        action: "remediation_confirmed".to_string(),
+                        action_taken: "confirmed".to_string(),
+                        origin: target
+                            .as_ref()
+                            .map(|target| {
+                                if is_auto_fable_target(target) {
+                                    "downgraded-from-fable"
+                                } else {
+                                    "configured-target-drift"
+                                }
+                            })
+                            .unwrap_or("unknown")
+                            .to_string(),
+                    });
+                }
             }
         }
         rows.push(WatchRow {
