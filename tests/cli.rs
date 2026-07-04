@@ -372,14 +372,58 @@ fn setup_can_create_config_target_and_ui_files() {
         .join("Library")
         .join("LaunchAgents")
         .join("com.misty-step.counterspell.annotate-herdr.plist");
+    let watch_agent = temp
+        .path()
+        .join("Library")
+        .join("LaunchAgents")
+        .join("com.misty-step.counterspell.watch-arm.plist");
     assert!(plugin.exists());
     assert!(launch_agent.exists());
+    assert!(watch_agent.exists());
     assert!(fs::read_to_string(plugin)
         .expect("plugin")
         .contains("COUNTERSPELL_BIN=\"${COUNTERSPELL_BIN:-"));
     assert!(fs::read_to_string(launch_agent)
         .expect("launch agent")
         .contains("--annotate-herdr"));
+    let watch_agent_text = fs::read_to_string(watch_agent).expect("watch agent");
+    assert!(watch_agent_text.contains("watch"));
+    assert!(watch_agent_text.contains("--arm"));
+    assert!(watch_agent_text.contains("<integer>60</integer>"));
+}
+
+#[test]
+fn install_ui_loads_annotation_and_watch_arm_agents() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let launchctl_log = temp.path().join("launchctl.log");
+    let launchctl = fake_launchctl(temp.path(), true);
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("install-ui")
+        .arg("--no-swiftbar")
+        .arg("--load")
+        .env("HOME", temp.path())
+        .env("COUNTERSPELL_LAUNCHCTL_BIN", &launchctl)
+        .env("COUNTERSPELL_LAUNCHCTL_LOG", &launchctl_log)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "installed Herdr annotation LaunchAgent",
+        ))
+        .stdout(predicate::str::contains("installed watch-arm LaunchAgent"))
+        .stdout(predicate::str::contains(
+            "loaded com.misty-step.counterspell.annotate-herdr",
+        ))
+        .stdout(predicate::str::contains(
+            "loaded com.misty-step.counterspell.watch-arm",
+        ));
+
+    let log = fs::read_to_string(launchctl_log).expect("launchctl log");
+    assert!(log.contains("bootstrap"));
+    assert!(log.contains("com.misty-step.counterspell.annotate-herdr.plist"));
+    assert!(log.contains("com.misty-step.counterspell.watch-arm.plist"));
+    assert!(log.contains("kickstart -k"));
 }
 
 #[test]
@@ -404,6 +448,16 @@ target_model = "claude-fable-5"
 "#,
     );
     let state = temp.path().join("state.json");
+    let launchctl = fake_launchctl(temp.path(), true);
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("install-ui")
+        .arg("--no-swiftbar")
+        .arg("--load")
+        .env("HOME", temp.path())
+        .env("COUNTERSPELL_LAUNCHCTL_BIN", &launchctl)
+        .assert()
+        .success();
     let (fake_herdr, fixture) = fake_herdr(
         temp.path(),
         &[("w13:p1", &cwd, "claude", "idle", "adminifi")],
@@ -423,12 +477,119 @@ target_model = "claude-fable-5"
         .env("HOME", temp.path())
         .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
         .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .env("COUNTERSPELL_LAUNCHCTL_BIN", &launchctl)
         .assert()
         .success()
         .stdout(predicate::str::contains("counterspell doctor"))
         .stdout(predicate::str::contains("targets: 1"))
         .stdout(predicate::str::contains("herdr: reachable"))
-        .stdout(predicate::str::contains("watched=1"));
+        .stdout(predicate::str::contains("watched=1"))
+        .stdout(predicate::str::contains("watch-arm agent:"))
+        .stdout(predicate::str::contains("scheduled"));
+}
+
+#[test]
+fn doctor_fails_when_watch_arm_agent_is_not_scheduled() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    fs::create_dir_all(&projects).expect("projects");
+    let config = write_config(temp.path(), "");
+    let state = temp.path().join("state.json");
+    let (fake_herdr, fixture) = fake_herdr(temp.path(), &[]);
+    let launchctl = fake_launchctl(temp.path(), false);
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("doctor")
+        .env("HOME", temp.path())
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .env("COUNTERSPELL_LAUNCHCTL_BIN", &launchctl)
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("watch-arm agent:"))
+        .stderr(predicate::str::contains(
+            "armed watch daemon is not scheduled",
+        ));
+}
+
+#[test]
+fn doctor_fails_when_installed_binary_predates_repo_head() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    fs::create_dir_all(&projects).expect("projects");
+    let config = write_config(temp.path(), "");
+    let state = temp.path().join("state.json");
+    let stale_bin = temp.path().join("counterspell-stale");
+    fs::copy(env!("CARGO_BIN_EXE_counterspell"), &stale_bin).expect("copy stale binary");
+    chmod_exec(&stale_bin);
+    Command::new("touch")
+        .arg("-t")
+        .arg("202001010000")
+        .arg(&stale_bin)
+        .assert()
+        .success();
+
+    let (fake_herdr, fixture) = fake_herdr(temp.path(), &[]);
+    let launchctl = fake_launchctl(temp.path(), true);
+
+    Command::new(&stale_bin)
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("doctor")
+        .env("HOME", temp.path())
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .env("COUNTERSPELL_LAUNCHCTL_BIN", &launchctl)
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("binary freshness: stale"))
+        .stderr(predicate::str::contains(
+            "installed binary is older than repo HEAD",
+        ));
+}
+
+#[test]
+fn doctor_fails_when_release_binary_predates_latest_release() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    fs::create_dir_all(&projects).expect("projects");
+    let config = write_config(temp.path(), "");
+    let state = temp.path().join("state.json");
+    let (fake_herdr, fixture) = fake_herdr(temp.path(), &[]);
+    let launchctl = fake_launchctl(temp.path(), true);
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("doctor")
+        .env("HOME", temp.path())
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .env("COUNTERSPELL_LAUNCHCTL_BIN", &launchctl)
+        .env("COUNTERSPELL_REPO_HEAD_UNIX", "none")
+        .env("COUNTERSPELL_LATEST_RELEASE_VERSION", "9.9.9")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("binary freshness: stale"))
+        .stderr(predicate::str::contains(
+            "installed binary is older than latest release",
+        ));
 }
 
 #[test]
@@ -506,6 +667,7 @@ target_model = "claude-fable-5"
         .arg("999")
         .arg("watch")
         .arg("--arm")
+        .env("HOME", temp.path())
         .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
         .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
         .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
@@ -560,6 +722,7 @@ target_model = "claude-fable-5"
         .arg("999")
         .arg("watch")
         .arg("--arm")
+        .env("HOME", temp.path())
         .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
         .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
         .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
@@ -611,6 +774,7 @@ target_model = "claude-fable-5"
         .arg("999")
         .arg("watch")
         .arg("--arm")
+        .env("HOME", temp.path())
         .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
         .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
         .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
@@ -654,6 +818,7 @@ fn watch_auto_targets_fable_history_without_explicit_target() {
         .arg("999")
         .arg("watch")
         .arg("--arm")
+        .env("HOME", temp.path())
         .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
         .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
         .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
@@ -704,6 +869,7 @@ target_model = "claude-fable-5"
         .arg("999")
         .arg("watch")
         .arg("--arm")
+        .env("HOME", temp.path())
         .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
         .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
         .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
@@ -729,6 +895,7 @@ target_model = "claude-fable-5"
         .arg("999")
         .arg("watch")
         .arg("--arm")
+        .env("HOME", temp.path())
         .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
         .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
         .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
@@ -778,6 +945,7 @@ target_model = "claude-fable-5"
         .arg("999")
         .arg("watch")
         .arg("--arm")
+        .env("HOME", temp.path())
         .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
         .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
         .env("COUNTERSPELL_HERDR_LOG", &herdr_log)
@@ -796,6 +964,83 @@ target_model = "claude-fable-5"
         .expect("model");
     assert!(compact < wait);
     assert!(wait < model);
+}
+
+#[test]
+fn watch_appends_bridge_feed_events_for_drift_remediation_and_born_on_opus() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let drift_cwd = temp.path().join("drift-repo");
+    let opus_cwd = temp.path().join("opus-repo");
+    let state = temp.path().join("counterspell-state.json");
+    let feed_dir = temp.path().join("feed");
+    fs::create_dir_all(&drift_cwd).expect("drift cwd");
+    fs::create_dir_all(&opus_cwd).expect("opus cwd");
+    write_transcript_with_models(
+        &projects,
+        "-Users-phaedrus-Development-drift",
+        "drift-session",
+        &drift_cwd,
+        &["claude-fable-5", "claude-opus-4-8"],
+    );
+    write_transcript_with_models(
+        &projects,
+        "-Users-phaedrus-Development-opus",
+        "opus-session",
+        &opus_cwd,
+        &["claude-opus-4-8"],
+    );
+    let config = write_config(temp.path(), "");
+    let (fake_herdr, fixture) = fake_herdr(
+        temp.path(),
+        &[
+            ("w13:p1", &drift_cwd, "claude", "idle", "drift"),
+            ("w13:p2", &opus_cwd, "claude", "idle", "opus"),
+        ],
+    );
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("--recent-hours")
+        .arg("999")
+        .arg("watch")
+        .arg("--arm")
+        .env("HOME", temp.path())
+        .env("COUNTERSPELL_FEED_DIR", &feed_dir)
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
+        .assert()
+        .success();
+
+    let feed_file = fs::read_dir(&feed_dir)
+        .expect("feed dir")
+        .next()
+        .expect("feed file")
+        .expect("feed entry")
+        .path();
+    let feed = fs::read_to_string(feed_file).expect("feed");
+    assert!(feed.contains(r#""schema_version":"weave.remote_event.v1""#));
+    assert!(feed.contains(r#""action":"model_drift_detected""#));
+    assert!(feed.contains(r#""action":"compact_sent""#));
+    assert!(feed.contains(r#""action":"model_switched""#));
+    assert!(feed.contains(r#""action":"remediation_confirmed""#));
+    assert!(feed.contains(r#""action":"session_ignored""#));
+    assert!(feed.contains(r#""origin":"downgraded-from-fable""#));
+    assert!(feed.contains(r#""origin":"born-on-opus""#));
+    assert!(feed.contains(r#""session_id":"drift-session""#));
+    assert!(feed.contains(r#""pane":"w13:p1""#));
+    assert!(feed.contains(r#""from_model":"claude-fable-5""#));
+    assert!(feed.contains(r#""to_model":"claude-opus-4-8""#));
+    assert!(!feed.contains(drift_cwd.to_string_lossy().as_ref()));
+    assert!(!feed.contains(opus_cwd.to_string_lossy().as_ref()));
+    assert!(!feed.contains("message"));
 }
 
 #[test]
@@ -884,6 +1129,7 @@ target_model = "claude-fable-5"
         .arg("--recent-hours")
         .arg("999")
         .arg("watch")
+        .env("HOME", temp.path())
         .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
         .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
         .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
@@ -1160,6 +1406,31 @@ fn hanging_herdr(temp_path: &Path) -> PathBuf {
     fs::write(&fake_herdr, "#!/bin/sh\nsleep 999\n").expect("hanging herdr");
     chmod_exec(&fake_herdr);
     fake_herdr
+}
+
+fn fake_launchctl(temp_path: &Path, scheduled: bool) -> PathBuf {
+    let fake_launchctl = temp_path.join("fake-launchctl");
+    let print_exit = if scheduled { 0 } else { 3 };
+    fs::write(
+        &fake_launchctl,
+        format!(
+            r#"#!/bin/sh
+if [ -n "$COUNTERSPELL_LAUNCHCTL_LOG" ]; then
+  printf '%s\n' "$*" >> "$COUNTERSPELL_LAUNCHCTL_LOG"
+fi
+if [ "$1" = "print" ]; then
+  case "$2" in
+    *com.misty-step.counterspell.watch-arm) exit {print_exit} ;;
+    *) exit 3 ;;
+  esac
+fi
+exit 0
+"#
+        ),
+    )
+    .expect("fake launchctl");
+    chmod_exec(&fake_launchctl);
+    fake_launchctl
 }
 
 fn chmod_exec(path: &Path) {

@@ -5,6 +5,8 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command as ProcessCommand;
+use std::time::UNIX_EPOCH;
 
 use crate::config::{
     add_target_to_config, config_path, default_config_text, describe_target_rule,
@@ -13,10 +15,12 @@ use crate::config::{
 };
 use crate::dashboard;
 use crate::defaults::DEFAULT_TARGET_MODEL;
+use crate::feed::append_feed_events;
 use crate::herdr::{annotate_herdr_pane, load_herdr_panes, matching_panes_for_cwd, pane_id};
 use crate::indicators::{
-    launch_agent_path, load_launch_agent, swiftbar_plugin_path, write_launch_agent,
-    write_swiftbar_plugin, LAUNCH_AGENT_LABEL,
+    launch_agent_path, launch_agent_scheduled, load_launch_agent, swiftbar_plugin_path,
+    watch_arm_launch_agent_path, write_launch_agent, write_swiftbar_plugin,
+    write_watch_arm_launch_agent, LAUNCH_AGENT_LABEL, WATCH_ARM_LAUNCH_AGENT_LABEL,
 };
 use crate::model::FileConfig;
 use crate::output::{print_status, print_status_json, print_watch};
@@ -172,6 +176,10 @@ struct InstallUiArgs {
     #[arg(long)]
     no_herdr_annotation: bool,
 
+    /// Do not install the armed watch LaunchAgent.
+    #[arg(long)]
+    no_watch_arm: bool,
+
     /// Load the Herdr annotation LaunchAgent after writing it.
     #[arg(long)]
     load: bool,
@@ -289,6 +297,7 @@ fn setup(cli: &Cli, args: &SetupArgs) -> Result<()> {
         install_ui(&InstallUiArgs {
             no_swiftbar: false,
             no_herdr_annotation: false,
+            no_watch_arm: false,
             load: args.load_ui,
             interval_secs: 60,
         })?;
@@ -303,14 +312,57 @@ fn doctor(cli: &Cli, _args: &DoctorArgs) -> Result<()> {
     let config_path = config_path(cli.config.clone(), &home);
     let state_path = state_path(cli.state.clone())?;
     let config = load_config(cli)?;
+    let mut failures = Vec::new();
 
     println!("counterspell doctor");
+    let binary_path = env::current_exe().ok();
     println!(
         "binary: {}",
-        env::current_exe()
+        binary_path
+            .as_ref()
             .map(|path| path.display().to_string())
-            .unwrap_or_else(|_| "unknown".to_string())
+            .unwrap_or_else(|| "unknown".to_string())
     );
+    match binary_path
+        .as_ref()
+        .map(|path| binary_freshness(path))
+        .transpose()?
+    {
+        Some(BinaryFreshness::Fresh {
+            binary_unix,
+            repo_head_unix,
+        }) => println!(
+            "binary freshness: ok (binary mtime {binary_unix} >= repo HEAD {repo_head_unix})"
+        ),
+        Some(BinaryFreshness::Stale {
+            binary_unix,
+            repo_head_unix,
+        }) => {
+            println!(
+                "binary freshness: stale (binary mtime {binary_unix} < repo HEAD {repo_head_unix})"
+            );
+            failures.push("installed binary is older than repo HEAD/latest release".to_string());
+        }
+        Some(BinaryFreshness::ReleaseFresh {
+            current_version,
+            latest_version,
+        }) => println!(
+            "binary freshness: ok (version {current_version} >= latest release {latest_version})"
+        ),
+        Some(BinaryFreshness::ReleaseStale {
+            current_version,
+            latest_version,
+        }) => {
+            println!(
+                "binary freshness: stale (version {current_version} < latest release {latest_version})"
+            );
+            failures.push("installed binary is older than latest release".to_string());
+        }
+        Some(BinaryFreshness::Unknown(reason)) => {
+            println!("binary freshness: unknown ({reason})");
+        }
+        None => println!("binary freshness: unknown (current executable unavailable)"),
+    }
     println!(
         "config: {} ({})",
         config_path.display(),
@@ -367,6 +419,7 @@ fn doctor(cli: &Cli, _args: &DoctorArgs) -> Result<()> {
 
     let swiftbar = swiftbar_plugin_path(&home);
     let launch_agent = launch_agent_path(&home);
+    let watch_arm_agent = watch_arm_launch_agent_path(&home);
     println!(
         "swiftbar: {} ({})",
         swiftbar.display(),
@@ -385,6 +438,43 @@ fn doctor(cli: &Cli, _args: &DoctorArgs) -> Result<()> {
             "missing"
         }
     );
+
+    let watch_arm_installed = watch_arm_agent.exists();
+    let watch_arm_scheduled = launch_agent_scheduled(WATCH_ARM_LAUNCH_AGENT_LABEL)
+        .map(|scheduled| {
+            if scheduled {
+                "scheduled".to_string()
+            } else {
+                failures.push("armed watch daemon is not scheduled".to_string());
+                "not scheduled".to_string()
+            }
+        })
+        .unwrap_or_else(|error| {
+            failures.push("armed watch daemon is not scheduled".to_string());
+            format!("schedule unknown ({error:#})")
+        });
+    println!(
+        "watch-arm agent: {} ({}, {})",
+        watch_arm_agent.display(),
+        if watch_arm_installed {
+            "installed"
+        } else {
+            "missing"
+        },
+        watch_arm_scheduled
+    );
+
+    if !watch_arm_installed
+        && !failures
+            .iter()
+            .any(|failure| failure == "armed watch daemon is not scheduled")
+    {
+        failures.push("armed watch daemon is not scheduled".to_string());
+    }
+
+    if !failures.is_empty() {
+        bail!("doctor failed: {}", failures.join("; "));
+    }
 
     Ok(())
 }
@@ -449,8 +539,21 @@ fn install_ui(args: &InstallUiArgs) -> Result<()> {
             launch_agent_path.display()
         );
         if args.load {
-            load_launch_agent(&launch_agent_path)?;
+            load_launch_agent(&launch_agent_path, LAUNCH_AGENT_LABEL)?;
             println!("loaded {LAUNCH_AGENT_LABEL}");
+        }
+    }
+
+    if !args.no_watch_arm {
+        let watch_arm_path = watch_arm_launch_agent_path(&home);
+        write_watch_arm_launch_agent(&watch_arm_path, &bin, args.interval_secs)?;
+        println!(
+            "installed watch-arm LaunchAgent {}",
+            watch_arm_path.display()
+        );
+        if args.load {
+            load_launch_agent(&watch_arm_path, WATCH_ARM_LAUNCH_AGENT_LABEL)?;
+            println!("loaded {WATCH_ARM_LAUNCH_AGENT_LABEL}");
         }
     }
 
@@ -470,10 +573,12 @@ fn watch(cli: &Cli, args: &WatchArgs) -> Result<()> {
     }
 
     let panes = load_herdr_panes().context("load Herdr panes for watch")?;
-    let (rows, store_changed) = watch_rows(&sessions, &panes, &mut store, &config, now, args.arm)?;
+    let (rows, store_changed, feed_events) =
+        watch_rows(&sessions, &panes, &mut store, &config, now, args.arm)?;
     if store_changed {
         save_store(&state_path, &store)?;
     }
+    append_feed_events(&feed_events, now)?;
     print_watch(&rows);
     Ok(())
 }
@@ -533,4 +638,149 @@ fn annotate_herdr(cli: &Cli) -> Result<()> {
 
     println!("annotated {annotated} Herdr pane(s)");
     Ok(())
+}
+
+#[derive(Debug)]
+enum BinaryFreshness {
+    Fresh {
+        binary_unix: u64,
+        repo_head_unix: u64,
+    },
+    Stale {
+        binary_unix: u64,
+        repo_head_unix: u64,
+    },
+    ReleaseFresh {
+        current_version: String,
+        latest_version: String,
+    },
+    ReleaseStale {
+        current_version: String,
+        latest_version: String,
+    },
+    Unknown(String),
+}
+
+fn binary_freshness(path: &std::path::Path) -> Result<BinaryFreshness> {
+    let binary_unix = fs::metadata(path)
+        .with_context(|| format!("read binary metadata {}", path.display()))?
+        .modified()
+        .with_context(|| format!("read binary mtime {}", path.display()))?
+        .duration_since(UNIX_EPOCH)
+        .with_context(|| format!("convert binary mtime {}", path.display()))?
+        .as_secs();
+
+    if let Some(repo_head_unix) = repo_head_unix() {
+        if binary_unix < repo_head_unix {
+            return Ok(BinaryFreshness::Stale {
+                binary_unix,
+                repo_head_unix,
+            });
+        }
+        return Ok(BinaryFreshness::Fresh {
+            binary_unix,
+            repo_head_unix,
+        });
+    }
+
+    let Some(latest_version) = latest_release_version() else {
+        return Ok(BinaryFreshness::Unknown(
+            "repo HEAD and latest release unavailable".to_string(),
+        ));
+    };
+    let current_version = env!("CARGO_PKG_VERSION").to_string();
+    if version_less_than(&current_version, &latest_version).unwrap_or(false) {
+        Ok(BinaryFreshness::ReleaseStale {
+            current_version,
+            latest_version,
+        })
+    } else {
+        Ok(BinaryFreshness::ReleaseFresh {
+            current_version,
+            latest_version,
+        })
+    }
+}
+
+fn repo_head_unix() -> Option<u64> {
+    if let Ok(value) = env::var("COUNTERSPELL_REPO_HEAD_UNIX") {
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("none") {
+            return None;
+        }
+        if let Ok(parsed) = value.parse::<u64>() {
+            return Some(parsed);
+        }
+        return None;
+    }
+
+    let output = ProcessCommand::new("git")
+        .args([
+            "-C",
+            env!("CARGO_MANIFEST_DIR"),
+            "log",
+            "-1",
+            "--format=%ct",
+            "HEAD",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+}
+
+fn latest_release_version() -> Option<String> {
+    if let Ok(value) = env::var("COUNTERSPELL_LATEST_RELEASE_VERSION") {
+        let value = value.trim();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+        return None;
+    }
+
+    let output = ProcessCommand::new("curl")
+        .args([
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--location",
+            "--max-time",
+            "2",
+            "https://api.github.com/repos/misty-step/counterspell/releases/latest",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    value
+        .get("tag_name")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+fn version_less_than(current: &str, latest: &str) -> Option<bool> {
+    let current = parse_version(current)?;
+    let latest = parse_version(latest)?;
+    Some(current < latest)
+}
+
+fn parse_version(value: &str) -> Option<Vec<u64>> {
+    let start = value.find(|character: char| character.is_ascii_digit())?;
+    let core = value[start..].split(['-', '+']).next().unwrap_or_default();
+    let mut parts = core
+        .split('.')
+        .map(str::parse::<u64>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    if parts.is_empty() {
+        return None;
+    }
+    while parts.len() < 3 {
+        parts.push(0);
+    }
+    Some(parts)
 }

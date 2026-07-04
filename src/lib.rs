@@ -3,6 +3,7 @@ mod config;
 mod dashboard;
 mod dashboard_render;
 mod defaults;
+mod feed;
 mod herdr;
 mod indicators;
 mod model;
