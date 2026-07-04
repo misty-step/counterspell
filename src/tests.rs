@@ -232,7 +232,9 @@ fn target_reason_renders_without_debug_quotes() {
         }],
         ..test_config()
     };
-    let session = test_session(now);
+    let mut session = test_session(now);
+    session.latest_model = Some("claude-opus-4-1".to_string());
+    session.model_history = vec!["claude-opus-4-1".to_string()];
 
     let target = target_for_session(&session, &config).expect("target");
 
@@ -240,6 +242,27 @@ fn target_reason_renders_without_debug_quotes() {
         format_target_match(&target),
         "claude-fable-5 (project:project*)"
     );
+}
+
+#[test]
+fn auto_fable_target_precedes_configured_targets() {
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let config = Config {
+        targets: vec![TargetRule {
+            session_id: Some("session-1".to_string()),
+            project_pattern: None,
+            cwd_pattern: None,
+            target_model: "claude-opus-4-8".to_string(),
+        }],
+        ..test_config()
+    };
+    let session = test_session(now);
+
+    let target = target_for_session(&session, &config).expect("target");
+
+    assert_eq!(format_target_match(&target), "claude-fable-5 (auto:fable)");
 }
 
 #[test]

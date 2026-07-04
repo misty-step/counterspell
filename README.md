@@ -32,7 +32,7 @@ counterspell ui
 
 It serves a browser UI on `127.0.0.1`, opens it by default, and refreshes the
 live Herdr Claude Code panes. Fable sessions are marked active automatically;
-non-Fable sessions stay inactive unless you add a configured override.
+non-Fable sessions stay inactive unless you add a configured target.
 
 4. Run the armed watch pass:
 
@@ -43,15 +43,15 @@ counterspell watch --arm
 Plain `counterspell watch` is a dry-run. It reports eligible compact/switch
 actions without sending text to Herdr or writing debounce state.
 
-For an explicit override, add a configured target:
+For extra coverage, add a configured target:
 
 ```sh
 counterspell target add --session-id db72af91-c78f-4b3f-80be-6dca7c264f75
 counterspell target list
 ```
 
-`target add` defaults to `claude-fable-5`; pass `--target-model` only when an
-override should enforce a different model.
+`target add` defaults to `claude-fable-5`; pass `--target-model` only when
+extra coverage should enforce a different model.
 
 ## Config
 
@@ -62,9 +62,9 @@ transcript whose model history includes `claude-fable-5` is watched with
 `claude-fable-5` as the desired model. That keeps a session active after it
 drifts away from Fable, which is when Counterspell needs to act.
 
-Configured `[[targets]]` entries are still supported for overrides and extra
-coverage. Each entry must set exactly one selector and one explicit
-`target_model`:
+Configured `[[targets]]` entries are still supported for extra coverage. The
+automatic Fable target takes precedence over configured targets. Each entry must
+set exactly one selector and one explicit `target_model`:
 
 ```toml
 [[targets]]

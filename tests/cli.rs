@@ -509,7 +509,7 @@ target_model = "claude-fable-5"
         .assert()
         .success()
         .stdout(predicate::str::contains("watch pass"))
-        .stdout(predicate::str::contains("session_id"))
+        .stdout(predicate::str::contains("auto:fable"))
         .stdout(predicate::str::contains(
             "compact then switch:claude-fable-5",
         ));
