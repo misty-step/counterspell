@@ -1,9 +1,12 @@
 use assert_cmd::prelude::*;
 use predicates::prelude::*;
 use std::fs;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 #[test]
 fn version_flag_reports_package_version() {
@@ -840,6 +843,167 @@ target_model = "claude-fable-5"
     assert!(!state.exists());
 }
 
+#[test]
+fn dashboard_rejects_target_enable_without_origin_or_referer() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config = write_config(temp.path(), "");
+
+    let port = free_port();
+    let mut server = spawn_dashboard_once(temp.path(), &config, port);
+    let response = send_raw_request(
+        port,
+        "POST",
+        "/targets/enable",
+        &[],
+        "session_id=csrf-reject-session",
+    );
+    server.wait().expect("dashboard exits after one request");
+
+    assert!(
+        response.starts_with("HTTP/1.1 403"),
+        "expected 403, got: {response}"
+    );
+    assert!(
+        !fs::read_to_string(&config)
+            .expect("config")
+            .contains("csrf-reject-session"),
+        "target must not be written when Origin/Referer is missing"
+    );
+}
+
+#[test]
+fn dashboard_rejects_target_enable_with_mismatched_origin() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config = write_config(temp.path(), "");
+
+    let port = free_port();
+    let mut server = spawn_dashboard_once(temp.path(), &config, port);
+    let response = send_raw_request(
+        port,
+        "POST",
+        "/targets/enable",
+        &[("Origin", "http://evil.example")],
+        "session_id=csrf-reject-session",
+    );
+    server.wait().expect("dashboard exits after one request");
+
+    assert!(
+        response.starts_with("HTTP/1.1 403"),
+        "expected 403, got: {response}"
+    );
+    assert!(
+        !fs::read_to_string(&config)
+            .expect("config")
+            .contains("csrf-reject-session"),
+        "target must not be written when Origin does not match the dashboard's own origin"
+    );
+}
+
+#[test]
+fn dashboard_accepts_target_enable_with_matching_origin() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config = write_config(temp.path(), "");
+
+    let port = free_port();
+    let mut server = spawn_dashboard_once(temp.path(), &config, port);
+    let origin = format!("http://127.0.0.1:{port}");
+    let response = send_raw_request(
+        port,
+        "POST",
+        "/targets/enable",
+        &[("Origin", &origin)],
+        "session_id=csrf-accept-session",
+    );
+    server.wait().expect("dashboard exits after one request");
+
+    assert!(
+        response.starts_with("HTTP/1.1 303"),
+        "expected 303 redirect, got: {response}"
+    );
+    assert!(
+        fs::read_to_string(&config)
+            .expect("config")
+            .contains("csrf-accept-session"),
+        "target must be written when Origin matches the dashboard's own origin"
+    );
+}
+
+#[test]
+fn dashboard_rejects_target_disable_without_origin_or_referer() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config = write_config(
+        temp.path(),
+        r#"
+[[targets]]
+session_id = "csrf-disable-session"
+target_model = "claude-fable-5"
+"#,
+    );
+
+    let port = free_port();
+    let mut server = spawn_dashboard_once(temp.path(), &config, port);
+    let response = send_raw_request(
+        port,
+        "POST",
+        "/targets/disable",
+        &[],
+        "session_id=csrf-disable-session",
+    );
+    server.wait().expect("dashboard exits after one request");
+
+    assert!(
+        response.starts_with("HTTP/1.1 403"),
+        "expected 403, got: {response}"
+    );
+    assert!(
+        fs::read_to_string(&config)
+            .expect("config")
+            .contains("csrf-disable-session"),
+        "target must not be removed when Origin/Referer is missing"
+    );
+}
+
+#[test]
+fn herdr_call_times_out_instead_of_hanging_forever() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let cwd = temp.path().join("repo");
+    fs::create_dir_all(&cwd).expect("cwd");
+    write_transcript(
+        &projects,
+        "-Users-phaedrus-Development-adminifi",
+        "adminifi-session",
+        &cwd,
+        "claude-fable-5",
+    );
+    let config = write_config(temp.path(), "");
+    let state = temp.path().join("state.json");
+    let hanging_herdr = hanging_herdr(temp.path());
+
+    let started = Instant::now();
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("--recent-hours")
+        .arg("999")
+        .arg("status")
+        .env("COUNTERSPELL_HERDR_BIN", &hanging_herdr)
+        .env("COUNTERSPELL_HERDR_TIMEOUT_MS", "200")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("timed out"));
+
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "a hung herdr must not block the caller past its configured deadline"
+    );
+}
+
 fn write_transcript(projects: &Path, project: &str, session_id: &str, cwd: &Path, model: &str) {
     write_transcript_with_models(projects, project, session_id, cwd, &[model]);
 }
@@ -924,8 +1088,87 @@ fn failing_herdr(temp_path: &Path) -> PathBuf {
     fake_herdr
 }
 
+fn hanging_herdr(temp_path: &Path) -> PathBuf {
+    let fake_herdr = temp_path.join("hanging-herdr");
+    fs::write(&fake_herdr, "#!/bin/sh\nsleep 999\n").expect("hanging herdr");
+    chmod_exec(&fake_herdr);
+    fake_herdr
+}
+
 fn chmod_exec(path: &Path) {
     let mut perms = fs::metadata(path).expect("metadata").permissions();
     perms.set_mode(0o755);
     fs::set_permissions(path, perms).expect("chmod");
+}
+
+/// Reserve an ephemeral loopback port, then release it. There's an inherent
+/// small race until the spawned dashboard binds it, but it's the standard
+/// pattern for handing a test server an OS-assigned free port.
+fn free_port() -> u16 {
+    TcpListener::bind(("127.0.0.1", 0))
+        .expect("bind ephemeral port")
+        .local_addr()
+        .expect("local addr")
+        .port()
+}
+
+/// Spawn `counterspell ui --once` in the background against an empty Herdr
+/// fixture (the /targets/enable and /targets/disable routes never call
+/// Herdr) so raw HTTP requests can be sent at it to exercise the CSRF guard.
+fn spawn_dashboard_once(temp_path: &Path, config: &Path, port: u16) -> Child {
+    Command::new(env!("CARGO_BIN_EXE_counterspell"))
+        .arg("--config")
+        .arg(config)
+        .arg("--state")
+        .arg(temp_path.join("state.json"))
+        .arg("ui")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--once")
+        .arg("--no-open")
+        .env("HOME", temp_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn dashboard")
+}
+
+/// Connect with retries rather than probing readiness separately: the
+/// dashboard is started with `--once` and serves exactly one connection, so
+/// a throwaway readiness probe would itself consume that single slot.
+fn connect_with_retry(port: u16) -> TcpStream {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(stream) => return stream,
+            Err(_) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => panic!("could not connect to dashboard on port {port}: {error}"),
+        }
+    }
+}
+
+fn send_raw_request(
+    port: u16,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> String {
+    let mut stream = connect_with_retry(port);
+    let mut request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n",
+        body.len()
+    );
+    for (name, value) in headers {
+        request.push_str(&format!("{name}: {value}\r\n"));
+    }
+    request.push_str("Connection: close\r\n\r\n");
+    request.push_str(body);
+
+    stream.write_all(request.as_bytes()).expect("write request");
+    let mut response = String::new();
+    stream.read_to_string(&mut response).expect("read response");
+    response
 }

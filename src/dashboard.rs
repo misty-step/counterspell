@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::process::Command as ProcessCommand;
 
 use crate::cli::{Cli, UiArgs};
@@ -67,6 +67,7 @@ struct Request {
     method: String,
     path: String,
     form: BTreeMap<String, String>,
+    headers: BTreeMap<String, String>,
 }
 
 pub(crate) fn serve_dashboard(cli: &Cli, args: &UiArgs) -> Result<()> {
@@ -240,6 +241,9 @@ fn load_all_tabs(workspaces: &[HerdrWorkspace]) -> Result<Vec<HerdrTab>> {
 }
 
 fn handle_connection(mut stream: TcpStream, cli: &Cli) -> Result<()> {
+    let local_addr = stream
+        .local_addr()
+        .context("resolve dashboard local address")?;
     let mut reader = BufReader::new(stream.try_clone().context("clone dashboard stream")?);
     let request = read_request(&mut reader)?;
 
@@ -263,10 +267,16 @@ fn handle_connection(mut stream: TcpStream, cli: &Cli) -> Result<()> {
             )
         }
         ("POST", "/targets/enable") => {
+            if !csrf_allowed(&request.headers, local_addr) {
+                return respond_forbidden(&mut stream);
+            }
             enable_session_target(cli, &request.form)?;
             redirect_home(&mut stream)
         }
         ("POST", "/targets/disable") => {
+            if !csrf_allowed(&request.headers, local_addr) {
+                return respond_forbidden(&mut stream);
+            }
             disable_session_target(cli, &request.form)?;
             redirect_home(&mut stream)
         }
@@ -282,6 +292,40 @@ fn handle_connection(mut stream: TcpStream, cli: &Cli) -> Result<()> {
     }
 }
 
+/// Reject cross-site form posts. The dashboard binds to loopback only, but
+/// without this check any local page (or another browser tab) can silently
+/// POST to /targets/enable|disable and rewrite ~/.counterspell/config.toml.
+/// Browsers attach `Origin` (all modern browsers, on POST navigations) or at
+/// minimum `Referer` for same-origin form submissions; neither present is
+/// treated as untrusted.
+fn csrf_allowed(headers: &BTreeMap<String, String>, local_addr: SocketAddr) -> bool {
+    let allowed_origins = [
+        format!("http://127.0.0.1:{}", local_addr.port()),
+        format!("http://localhost:{}", local_addr.port()),
+    ];
+
+    if let Some(origin) = headers.get("origin") {
+        return allowed_origins.iter().any(|allowed| origin == allowed);
+    }
+
+    if let Some(referer) = headers.get("referer") {
+        return allowed_origins.iter().any(|allowed| {
+            referer == allowed || referer.starts_with(format!("{allowed}/").as_str())
+        });
+    }
+
+    false
+}
+
+fn respond_forbidden(stream: &mut TcpStream) -> Result<()> {
+    respond(
+        stream,
+        "403 Forbidden",
+        "text/plain; charset=utf-8",
+        "forbidden: missing or mismatched Origin/Referer\n".to_string(),
+    )
+}
+
 fn read_request(reader: &mut BufReader<TcpStream>) -> Result<Request> {
     let mut request_line = String::new();
     reader
@@ -292,6 +336,7 @@ fn read_request(reader: &mut BufReader<TcpStream>) -> Result<Request> {
     let raw_path = parts.next().unwrap_or("/");
     let path = raw_path.split('?').next().unwrap_or("/").to_string();
     let mut content_length = 0usize;
+    let mut headers = BTreeMap::new();
 
     loop {
         let mut header = String::new();
@@ -302,8 +347,13 @@ fn read_request(reader: &mut BufReader<TcpStream>) -> Result<Request> {
         if header.is_empty() {
             break;
         }
-        if let Some(value) = header.strip_prefix("Content-Length:") {
-            content_length = value.trim().parse::<usize>().unwrap_or(0);
+        if let Some((name, value)) = header.split_once(':') {
+            let name = name.trim().to_ascii_lowercase();
+            let value = value.trim().to_string();
+            if name == "content-length" {
+                content_length = value.parse::<usize>().unwrap_or(0);
+            }
+            headers.insert(name, value);
         }
     }
 
@@ -318,6 +368,7 @@ fn read_request(reader: &mut BufReader<TcpStream>) -> Result<Request> {
         method,
         path,
         form: parse_form(&String::from_utf8_lossy(&body)),
+        headers,
     })
 }
 
