@@ -567,6 +567,59 @@ target_model = "claude-fable-5"
 }
 
 #[test]
+fn watch_breaks_same_cwd_tie_on_sole_focused_pane() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let cwd = temp.path().join("repo");
+    fs::create_dir_all(&cwd).expect("cwd");
+    write_transcript_with_models(
+        &projects,
+        "-Users-phaedrus-Development-adminifi",
+        "adminifi-session",
+        &cwd,
+        &["claude-fable-5", "claude-opus-4-8"],
+    );
+    let config = write_config(
+        temp.path(),
+        r#"
+[[targets]]
+session_id = "adminifi-session"
+target_model = "claude-fable-5"
+"#,
+    );
+    let state = temp.path().join("state.json");
+    let (fake_herdr, fixture) = fake_herdr_with_focus(
+        temp.path(),
+        &[
+            ("w13:p1", &cwd, "claude", "idle", "adminifi-a", false),
+            ("w13:p2", &cwd, "claude", "idle", "adminifi-b", true),
+        ],
+    );
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("--recent-hours")
+        .arg("999")
+        .arg("watch")
+        .arg("--arm")
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("focused-tiebreak:w13:p2"))
+        .stdout(predicate::str::contains(
+            "compact then switch:claude-fable-5",
+        ));
+}
+
+#[test]
 fn watch_auto_targets_fable_history_without_explicit_target() {
     let temp = tempfile::tempdir().expect("tempdir");
     let projects = temp.path().join("projects");
@@ -875,17 +928,31 @@ fn write_config(temp_path: &Path, contents: &str) -> PathBuf {
 }
 
 fn fake_herdr(temp_path: &Path, panes: &[(&str, &Path, &str, &str, &str)]) -> (PathBuf, PathBuf) {
-    let fixture = temp_path.join("herdr.json");
     let panes = panes
         .iter()
         .map(|(pane_id, cwd, agent, status, label)| {
+            (*pane_id, *cwd, *agent, *status, *label, false)
+        })
+        .collect::<Vec<_>>();
+    fake_herdr_with_focus(temp_path, &panes)
+}
+
+fn fake_herdr_with_focus(
+    temp_path: &Path,
+    panes: &[(&str, &Path, &str, &str, &str, bool)],
+) -> (PathBuf, PathBuf) {
+    let fixture = temp_path.join("herdr.json");
+    let panes = panes
+        .iter()
+        .map(|(pane_id, cwd, agent, status, label, focused)| {
             serde_json::json!({
                 "pane_id": pane_id,
                 "cwd": cwd,
                 "foreground_cwd": cwd,
                 "agent": agent,
                 "agent_status": status,
-                "label": label
+                "label": label,
+                "focused": focused
             })
         })
         .collect::<Vec<_>>();

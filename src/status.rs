@@ -125,9 +125,17 @@ pub(crate) fn watch_rows(
         let state: Option<&SessionState> = store.sessions.get(&session.session_id);
         let plan = remediation_plan(session, &matching_panes, state, config, now);
         if arm && !plan.actions.is_empty() {
-            let pane = matching_panes
-                .first()
-                .copied()
+            let pane = plan
+                .gate
+                .focused_tiebreak
+                .as_deref()
+                .and_then(|winner| {
+                    matching_panes
+                        .iter()
+                        .copied()
+                        .find(|pane| pane_id(pane) == winner)
+                })
+                .or_else(|| matching_panes.first().copied())
                 .context("eligible remediation plan had no Herdr pane")?;
             execute_remediation(pane_id(pane), &plan.actions)?;
             store.sessions.insert(

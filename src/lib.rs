@@ -28,8 +28,8 @@ pub(crate) use model::{
 };
 #[cfg(test)]
 pub(crate) use remediation::{
-    detect_drift, format_target_match, gate_decision_for_matches, remediation_plan,
-    target_for_session,
+    describe_gate, detect_drift, format_target_match, gate_decision_for_matches, remediation_plan,
+    status_state, target_for_session,
 };
 #[cfg(test)]
 pub(crate) use sessions::parse_transcript_file;
