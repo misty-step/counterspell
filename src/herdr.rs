@@ -2,10 +2,16 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::env;
 use std::ffi::OsString;
+use std::io::Read;
 use std::path::PathBuf;
-use std::process::Command as ProcessCommand;
+use std::process::{Command as ProcessCommand, Stdio};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use crate::util::normalize_path;
+
+const DEFAULT_HERDR_TIMEOUT: Duration = Duration::from_secs(10);
+const HERDR_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 #[derive(Debug, Clone, Deserialize)]
 struct HerdrPaneList {
@@ -92,15 +98,50 @@ pub(crate) fn load_herdr_tabs(workspace_id: &str) -> Result<Vec<HerdrTab>> {
 pub(crate) fn run_herdr_args(args: &[&str]) -> Result<std::process::Output> {
     let herdr_bin =
         env::var_os("COUNTERSPELL_HERDR_BIN").unwrap_or_else(|| OsString::from("herdr"));
-    let output = ProcessCommand::new(&herdr_bin)
+    let mut child = ProcessCommand::new(&herdr_bin)
         .args(args)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .with_context(|| {
             format!(
-                "run {}; Herdr must be installed and running for pane discovery/injection",
+                "spawn {}; Herdr must be installed and running for pane discovery/injection",
                 PathBuf::from(&herdr_bin).display()
             )
         })?;
+
+    // Drain stdout/stderr on background threads so a chatty herdr can't fill
+    // its pipe buffer and deadlock while we poll for exit below.
+    let stdout_reader = spawn_pipe_reader(child.stdout.take());
+    let stderr_reader = spawn_pipe_reader(child.stderr.take());
+
+    let timeout = herdr_timeout();
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("poll {}", PathBuf::from(&herdr_bin).display()))?
+        {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!(
+                "{} {:?} timed out after {:?}; Herdr must be installed, running, and responsive",
+                PathBuf::from(&herdr_bin).display(),
+                args,
+                timeout
+            );
+        }
+        thread::sleep(HERDR_POLL_INTERVAL);
+    };
+
+    let output = std::process::Output {
+        status,
+        stdout: stdout_reader.join().unwrap_or_default(),
+        stderr: stderr_reader.join().unwrap_or_default(),
+    };
 
     if !output.status.success() {
         bail!(
@@ -112,6 +153,24 @@ pub(crate) fn run_herdr_args(args: &[&str]) -> Result<std::process::Output> {
     }
 
     Ok(output)
+}
+
+fn herdr_timeout() -> Duration {
+    env::var("COUNTERSPELL_HERDR_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(DEFAULT_HERDR_TIMEOUT)
+}
+
+fn spawn_pipe_reader<R: Read + Send + 'static>(pipe: Option<R>) -> JoinHandle<Vec<u8>> {
+    thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    })
 }
 
 pub(crate) fn annotate_herdr_pane(pane_id: &str, title: &str, status: &str) -> Result<()> {
