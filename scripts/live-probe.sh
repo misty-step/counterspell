@@ -142,14 +142,16 @@ log "waiting for claude TUI (accepting trust dialog if shown)..."
 TUI_READY=""
 deadline=$(( $(date +%s) + 60 ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
+  # The pane can be very narrow (~24 cols), so screen text hard-wraps mid
+  # phrase — match single words that survive wrapping, never multi-word spans.
   screen=$(herdr pane read "$PANE" --source visible --lines 40 2>/dev/null || true)
-  if printf '%s' "$screen" | grep -qi 'trust this folder'; then
+  if printf '%s' "$screen" | grep -qi 'trust'; then
     log "accepting folder-trust dialog..."
     herdr pane send-keys "$PANE" Enter >/dev/null
     sleep 3
     continue
   fi
-  if printf '%s' "$screen" | grep -q 'tokens'; then
+  if printf '%s' "$screen" | grep -qi 'tokens'; then
     TUI_READY=1
     break
   fi
