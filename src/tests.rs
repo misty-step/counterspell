@@ -216,14 +216,15 @@ fn drift_on_working_session_bound_pane_interrupts_and_remediates_in_one_pass() {
     let plan = remediation_plan(&session, &panes, None, &config, now);
 
     assert!(plan.gate.is_allowed());
-    // The whole chain runs synchronously in one pass: the switch must never
-    // depend on a later tick happening to sample the pane idle (that lost
-    // the 2026-07-04 switch on a busy session).
+    // The whole chain fires in one pass: the switch must never depend on a
+    // later tick happening to sample the pane idle (that lost the
+    // 2026-07-04 switch on a busy session). The compact is QUEUED, not
+    // waited on — the switch typed behind it executes post-compact FIFO.
     assert_eq!(
         plan.actions,
         vec![
             PlannedAction::Interrupt,
-            PlannedAction::Compact,
+            PlannedAction::QueueCompact,
             PlannedAction::SwitchModel("claude-fable-5".to_string())
         ]
     );

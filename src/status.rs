@@ -194,10 +194,13 @@ pub(crate) fn watch_rows(
                 .copied()
                 .context("eligible remediation plan had no Herdr pane")?;
             let now_unix: u64 = now.timestamp().try_into().unwrap_or(0);
-            let sends_compact = plan
-                .actions
-                .iter()
-                .any(|action| matches!(action, crate::model::PlannedAction::Compact));
+            let sends_compact = plan.actions.iter().any(|action| {
+                matches!(
+                    action,
+                    crate::model::PlannedAction::Compact
+                        | crate::model::PlannedAction::QueueCompact
+                )
+            });
             if sends_compact {
                 // Persist the in-flight marker to disk BEFORE typing
                 // anything, so a concurrently launched watch (or a restart
@@ -216,7 +219,25 @@ pub(crate) fn watch_rows(
                     crate::store::save_store(state_path, store)?;
                 }
             }
-            execute_remediation(pane_id(pane), &plan.actions)?;
+            if let Err(error) = execute_remediation(pane_id(pane), &plan.actions) {
+                // The chain died; nothing is in flight anymore. Leaving the
+                // marker set would block every retry for its whole expiry
+                // while the session keeps working downgraded (2026-07-04,
+                // second incident). Clear it so the next tick re-fires.
+                store.sessions.insert(
+                    session.session_id.clone(),
+                    SessionState {
+                        session_id: session.session_id.clone(),
+                        cwd: session.cwd.clone(),
+                        last_action_unix: prior_last_action_unix,
+                        pending_compact_unix: None,
+                    },
+                );
+                if let Some(state_path) = state_path {
+                    crate::store::save_store(state_path, store)?;
+                }
+                return Err(error);
+            }
             let switched = plan
                 .actions
                 .iter()
@@ -248,6 +269,9 @@ pub(crate) fn watch_rows(
                         action: match action {
                             crate::model::PlannedAction::Compact => "compact_sent".to_string(),
                             crate::model::PlannedAction::Interrupt => "interrupt_sent".to_string(),
+                            crate::model::PlannedAction::QueueCompact => {
+                                "compact_queued".to_string()
+                            }
                             crate::model::PlannedAction::SwitchModel(_) => {
                                 "model_switched".to_string()
                             }
@@ -255,6 +279,9 @@ pub(crate) fn watch_rows(
                         action_taken: match action {
                             crate::model::PlannedAction::Compact => "compact_sent".to_string(),
                             crate::model::PlannedAction::Interrupt => "interrupt_sent".to_string(),
+                            crate::model::PlannedAction::QueueCompact => {
+                                "compact_queued".to_string()
+                            }
                             crate::model::PlannedAction::SwitchModel(model) => {
                                 format!("model_switched:{model}")
                             }

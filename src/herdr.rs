@@ -106,6 +106,17 @@ pub(crate) fn load_herdr_tabs(workspace_id: &str) -> Result<Vec<HerdrTab>> {
 }
 
 pub(crate) fn run_herdr_args(args: &[&str]) -> Result<std::process::Output> {
+    run_herdr_args_with_timeout(args, herdr_timeout())
+}
+
+/// `herdr wait ...` legitimately blocks for as long as its own `--timeout`
+/// asks — the caller must size the subprocess timeout above it. The default
+/// 10s kill silently truncated a 20s interrupt wait on 2026-07-04 and would
+/// truncate every 180s compact wait.
+pub(crate) fn run_herdr_args_with_timeout(
+    args: &[&str],
+    timeout: Duration,
+) -> Result<std::process::Output> {
     let herdr_bin =
         env::var_os("COUNTERSPELL_HERDR_BIN").unwrap_or_else(|| OsString::from("herdr"));
     let mut child = ProcessCommand::new(&herdr_bin)
@@ -124,8 +135,6 @@ pub(crate) fn run_herdr_args(args: &[&str]) -> Result<std::process::Output> {
     // its pipe buffer and deadlock while we poll for exit below.
     let stdout_reader = spawn_pipe_reader(child.stdout.take());
     let stderr_reader = spawn_pipe_reader(child.stderr.take());
-
-    let timeout = herdr_timeout();
     let deadline = Instant::now() + timeout;
     let status = loop {
         if let Some(status) = child

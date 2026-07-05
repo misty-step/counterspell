@@ -2,10 +2,10 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 
 use crate::defaults::{
-    COMPACT_COMMAND, COMPACT_WAIT_TIMEOUT_MS, DEFAULT_TARGET_MODEL, INTERRUPT_WAIT_TIMEOUT_MS,
-    PENDING_COMPACT_EXPIRY_SECONDS,
+    COMPACT_COMMAND, COMPACT_WAIT_TIMEOUT_MS, DEFAULT_TARGET_MODEL, HERDR_WAIT_MARGIN_MS,
+    INTERRUPT_WAIT_TIMEOUT_MS, PENDING_COMPACT_EXPIRY_SECONDS,
 };
-use crate::herdr::{pane_session_id, run_herdr_args, HerdrPane};
+use crate::herdr::{pane_session_id, run_herdr_args, run_herdr_args_with_timeout, HerdrPane};
 use crate::model::{
     Config, GateBlocker, GateDecision, ModelDrift, PlannedAction, RemediationPlan, SessionState,
     TargetMatch, TranscriptSession,
@@ -20,35 +20,48 @@ pub(crate) fn execute_remediation(pane_id: &str, actions: &[PlannedAction]) -> R
             PlannedAction::Compact => {
                 run_herdr_args(&["pane", "run", pane_id, COMPACT_COMMAND])
                     .with_context(|| format!("send compact command to Herdr pane {pane_id}"))?;
-                run_herdr_args(&[
-                    "wait",
-                    "agent-status",
-                    pane_id,
-                    "--status",
-                    "idle",
-                    "--timeout",
-                    &COMPACT_WAIT_TIMEOUT_MS.to_string(),
-                ])
+                run_herdr_args_with_timeout(
+                    &[
+                        "wait",
+                        "agent-status",
+                        pane_id,
+                        "--status",
+                        "idle",
+                        "--timeout",
+                        &COMPACT_WAIT_TIMEOUT_MS.to_string(),
+                    ],
+                    wait_subprocess_timeout(COMPACT_WAIT_TIMEOUT_MS),
+                )
                 .with_context(|| format!("wait for compact to finish in Herdr pane {pane_id}"))?;
             }
             PlannedAction::Interrupt => {
-                // Escape ends the current turn (interrupt, not kill). The
-                // short idle wait confirms the interrupt landed; if a queued
-                // message immediately starts a new turn after this returns,
-                // the follow-up /compact and /model still land in FIFO order
-                // as queued inputs and execute when that turn ends.
+                // Escape ends the current turn (interrupt, not kill).
                 run_herdr_args(&["pane", "send-keys", pane_id, "escape"])
                     .with_context(|| format!("send escape to Herdr pane {pane_id}"))?;
-                run_herdr_args(&[
-                    "wait",
-                    "agent-status",
-                    pane_id,
-                    "--status",
-                    "idle",
-                    "--timeout",
-                    &INTERRUPT_WAIT_TIMEOUT_MS.to_string(),
-                ])
-                .with_context(|| format!("wait for interrupt to land in Herdr pane {pane_id}"))?;
+                // Best-effort pause so the queued compact executes right
+                // away instead of at the end of a resumed turn. IGNORED on
+                // failure: herdr's agent-status lags interrupts, and the
+                // rest of the chain is queue-safe regardless — aborting
+                // here is what left a session downgraded behind a stuck
+                // in-flight marker on 2026-07-04.
+                let _ = run_herdr_args_with_timeout(
+                    &[
+                        "wait",
+                        "agent-status",
+                        pane_id,
+                        "--status",
+                        "idle",
+                        "--timeout",
+                        &INTERRUPT_WAIT_TIMEOUT_MS.to_string(),
+                    ],
+                    wait_subprocess_timeout(INTERRUPT_WAIT_TIMEOUT_MS),
+                );
+            }
+            PlannedAction::QueueCompact => {
+                // No wait afterward, by design: the switch typed behind
+                // this queues FIFO and executes post-compact.
+                run_herdr_args(&["pane", "run", pane_id, COMPACT_COMMAND])
+                    .with_context(|| format!("queue compact command into Herdr pane {pane_id}"))?;
             }
             PlannedAction::SwitchModel(model) => {
                 let command = format!("/model {model}");
@@ -59,6 +72,10 @@ pub(crate) fn execute_remediation(pane_id: &str, actions: &[PlannedAction]) -> R
     }
 
     Ok(())
+}
+
+fn wait_subprocess_timeout(wait_ms: u64) -> std::time::Duration {
+    std::time::Duration::from_millis(wait_ms + HERDR_WAIT_MARGIN_MS)
 }
 
 pub(crate) fn remediation_plan(
@@ -107,7 +124,7 @@ pub(crate) fn remediation_plan(
                         },
                         actions: vec![
                             PlannedAction::Interrupt,
-                            PlannedAction::Compact,
+                            PlannedAction::QueueCompact,
                             PlannedAction::SwitchModel(target.target_model.clone()),
                         ],
                     };
@@ -309,6 +326,7 @@ pub(crate) fn describe_actions(actions: &[PlannedAction]) -> String {
         .map(|action| match action {
             PlannedAction::Compact => "compact".to_string(),
             PlannedAction::Interrupt => "interrupt".to_string(),
+            PlannedAction::QueueCompact => "queue-compact".to_string(),
             PlannedAction::SwitchModel(model) => format!("switch:{model}"),
         })
         .collect::<Vec<_>>()

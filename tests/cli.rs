@@ -853,7 +853,7 @@ target_model = "claude-fable-5"
     };
 
     run("working pane").stdout(predicate::str::contains(
-        "interrupt then compact then switch:claude-fable-5",
+        "interrupt then queue-compact then switch:claude-fable-5",
     ));
     let log = fs::read_to_string(&herdr_log).expect("herdr log");
     let escape_at = log
@@ -868,10 +868,6 @@ target_model = "claude-fable-5"
     assert!(
         escape_at < compact_at && compact_at < switch_at,
         "chain must run escape -> compact -> switch in order, log: {log}"
-    );
-    assert!(
-        log.contains("wait agent-status w13:p1 --status idle"),
-        "the chain must wait for idle between steps, log: {log}"
     );
 
     // Pass 2: the switch just fired, so the session is debounced — a second
@@ -894,6 +890,113 @@ target_model = "claude-fable-5"
         1,
         "the follow-up pass must not escape again, log: {log}"
     );
+}
+
+#[test]
+fn watch_clears_in_flight_marker_when_chain_aborts_so_next_tick_refires() {
+    // 2026-07-04 second incident: an aborted chain left pending_compact set,
+    // and every subsequent tick reported compact-pending while the session
+    // kept working downgraded for the marker's whole expiry.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let cwd = temp.path().join("repo");
+    fs::create_dir_all(&cwd).expect("cwd");
+    write_transcript_with_models(
+        &projects,
+        "-Users-phaedrus-Development-adminifi",
+        "adminifi-session",
+        &cwd,
+        &["claude-fable-5", "claude-opus-4-8"],
+    );
+    let config = write_config(
+        temp.path(),
+        r#"
+[[targets]]
+session_id = "adminifi-session"
+target_model = "claude-fable-5"
+"#,
+    );
+    let state = temp.path().join("state.json");
+    let herdr_log = temp.path().join("herdr.log");
+    let (fake_herdr, fixture) = fake_herdr_with_sessions(
+        temp.path(),
+        &[(
+            "w13:p1",
+            &cwd,
+            "claude",
+            "working",
+            false,
+            Some("adminifi-session"),
+        )],
+    );
+
+    let run = |herdr_bin: &Path, expect_success: bool| {
+        let assert = Command::cargo_bin("counterspell")
+            .expect("binary")
+            .arg("--projects-dir")
+            .arg(&projects)
+            .arg("--config")
+            .arg(&config)
+            .arg("--state")
+            .arg(&state)
+            .arg("--recent-hours")
+            .arg("999")
+            .arg("watch")
+            .arg("--arm")
+            .env("HOME", temp.path())
+            .env("COUNTERSPELL_HERDR_BIN", herdr_bin)
+            .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+            .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
+            .env("COUNTERSPELL_HERDR_LOG", &herdr_log)
+            .assert();
+        if expect_success {
+            assert.success()
+        } else {
+            assert.failure()
+        }
+    };
+
+    // Pass 1: pane run fails mid-chain — the pass errors out, but the
+    // in-flight marker must NOT survive on disk.
+    let broken_herdr = fake_herdr_failing_pane_run(temp.path());
+    run(&broken_herdr, false);
+    let state_json = fs::read_to_string(&state).expect("state written");
+    assert!(
+        !state_json.contains("pending_compact_unix"),
+        "aborted chain must clear the in-flight marker, state: {state_json}"
+    );
+
+    // Pass 2: herdr healthy again — the chain re-fires instead of sitting
+    // behind compact-pending.
+    run(&fake_herdr, true);
+    let log = fs::read_to_string(&herdr_log).expect("herdr log");
+    assert!(
+        log.contains("pane run w13:p1 /model claude-fable-5"),
+        "retry tick must deliver the switch, log: {log}"
+    );
+}
+
+fn fake_herdr_failing_pane_run(temp_path: &Path) -> PathBuf {
+    let fake_herdr = temp_path.join("fake-herdr-failing-run");
+    fs::write(
+        &fake_herdr,
+        r#"#!/bin/sh
+if [ "$1" = "pane" ] && [ "$2" = "list" ]; then
+  cat "$COUNTERSPELL_HERDR_FIXTURE"
+  exit 0
+fi
+if [ -n "$COUNTERSPELL_HERDR_LOG" ]; then
+  printf '%s\n' "$*" >> "$COUNTERSPELL_HERDR_LOG"
+fi
+if [ "$1" = "pane" ] && [ "$2" = "run" ]; then
+  exit 7
+fi
+exit 0
+"#,
+    )
+    .expect("fake herdr");
+    chmod_exec(&fake_herdr);
+    fake_herdr
 }
 
 #[test]

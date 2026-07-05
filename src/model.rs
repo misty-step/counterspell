@@ -128,12 +128,22 @@ pub(crate) struct ModelDrift {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PlannedAction {
+    /// Idle path: type /compact and hold until the pane is idle again
+    /// before the follow-up switch goes out.
     Compact,
     /// Fast path opener: press Escape in a working pane to end the current
-    /// turn immediately (interrupt, not kill), then wait briefly for idle.
-    /// A downgraded session must not keep burning the wrong model for the
-    /// rest of a long turn — 2026-07-04 postmortem.
+    /// turn immediately (interrupt, not kill). A downgraded session must
+    /// not keep burning the wrong model for the rest of a long turn —
+    /// 2026-07-04 postmortem. The follow-up idle wait is best-effort only;
+    /// the rest of the chain is queue-safe by design.
     Interrupt,
+    /// Fast path: type /compact WITHOUT waiting for it to run. Composer
+    /// inputs execute in FIFO order at turn end, so the switch typed right
+    /// behind this executes after the compact — on the small post-compact
+    /// context, dialog-free — no matter how busy the pane is. Never gate
+    /// the chain on observing pane state between steps: status reporting
+    /// lags and queued messages steal idle windows (2026-07-04, twice).
+    QueueCompact,
     SwitchModel(String),
 }
 
