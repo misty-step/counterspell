@@ -93,6 +93,9 @@ log "watch log baseline: ${WATCH_LOG_START_LINES} lines"
 WS="${1:-}"
 CWD="${SCRATCH_ROOT}/run-$$"
 mkdir -p "$CWD"
+# Claude Code names the project dir after the RESOLVED cwd (symlinks like
+# /var -> /private/var expanded, no duplicate slashes) — resolve ours to match.
+CWD=$(cd "$CWD" && pwd -P)
 if [ -z "$WS" ]; then
   log "creating isolated workspace..."
   WS=$(herdr workspace create --no-focus --label counterspell-e2e --cwd "$CWD" \
@@ -133,7 +136,16 @@ herdr wait agent-status "$PANE" --status idle --timeout 45000 >/dev/null 2>&1 \
   || true
 sleep 5
 
-# --- 3. discover THIS session's transcript ----------------------------------
+# --- 3. send the trigger prompt ---------------------------------------------
+# This happens BEFORE transcript discovery: Claude Code creates the session
+# .jsonl lazily on the first exchange, so waiting for it pre-prompt deadlocks.
+log "sending trigger prompt (safety-route + counting tail)..."
+herdr pane send-text "$PANE" "$TRIGGER_PROMPT" >/dev/null
+sleep 1
+herdr pane send-keys "$PANE" Enter >/dev/null
+log "prompt submitted"
+
+# --- 4. discover THIS session's transcript ----------------------------------
 log "locating probe transcript..."
 SESSION_FILE=""
 deadline=$(( $(date +%s) + SESSION_APPEAR_TIMEOUT_SECS ))
@@ -147,14 +159,7 @@ done
 [ -n "$SESSION_FILE" ] || fail "probe transcript never appeared under $PROJ_DIR"
 SESSION_ID=$(basename "$SESSION_FILE" .jsonl)
 SHORT_ID=${SESSION_ID:0:8}
-log "session: $SESSION_ID  (short $SHORT_ID)"
-
-# --- 4. send the trigger prompt ---------------------------------------------
-log "sending trigger prompt (safety-route + counting tail)..."
-herdr pane send-text "$PANE" "$TRIGGER_PROMPT" >/dev/null
-sleep 1
-herdr pane send-keys "$PANE" Enter >/dev/null
-log "prompt submitted; watching for Fable->non-Fable drift..."
+log "session: $SESSION_ID  (short $SHORT_ID); watching for Fable->non-Fable drift..."
 
 # newest model recorded in the transcript for this session
 current_model() {
