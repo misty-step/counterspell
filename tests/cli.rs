@@ -988,6 +988,9 @@ fn fake_herdr_failing_pane_run(temp_path: &Path) -> PathBuf {
         &fake_herdr,
         r#"#!/bin/sh
 if [ "$1" = "pane" ] && [ "$2" = "list" ]; then
+  if [ -n "$COUNTERSPELL_HERDR_LOG" ]; then
+    printf '%s\n' "$*" >> "$COUNTERSPELL_HERDR_LOG"
+  fi
   cat "$COUNTERSPELL_HERDR_FIXTURE"
   exit 0
 fi
@@ -1284,14 +1287,17 @@ target_model = "claude-fable-5"
         .stdout(predicate::str::contains("compact then switch").not())
         .stdout(predicate::str::contains("switch:claude-fable-5").not());
 
+    // The log now records read-only `pane list` samples too, so "no
+    // injection" means no pane run / send-keys lines, not an absent file.
+    let log = fs::read_to_string(&herdr_log).unwrap_or_default();
     assert!(
-        !herdr_log.exists(),
+        !log.contains("pane run") && !log.contains("send-keys"),
         "stale drift behind a recorded switch must not inject into Herdr"
     );
 }
 
 #[test]
-fn watch_arm_injects_compact_then_wait_then_model_switch() {
+fn watch_arm_injects_compact_then_samples_status_then_model_switch() {
     let temp = tempfile::tempdir().expect("tempdir");
     let projects = temp.path().join("projects");
     let cwd = temp.path().join("repo");
@@ -1343,15 +1349,22 @@ target_model = "claude-fable-5"
 
     let log = fs::read_to_string(herdr_log).expect("herdr log");
     let compact = log.find("pane run w13:p1 /compact").expect("compact");
-    let wait = log.find("wait agent-status w13:p1").expect("wait");
+    // Pacing between compact and switch is a direct status sample
+    // (`pane list`), not `wait agent-status`: managed panes settle to
+    // `done`, which the wait command cannot express, and the old wait
+    // burned its full 180s timeout on them.
+    let sample = log[compact..]
+        .find("pane list")
+        .map(|offset| compact + offset)
+        .expect("status sample after compact");
     let model = log
         .find("pane run w13:p1 /model claude-fable-5")
         .expect("model");
     let confirm = log
         .find("pane send-keys w13:p1 enter")
         .expect("model confirmation");
-    assert!(compact < wait);
-    assert!(wait < model);
+    assert!(compact < sample);
+    assert!(sample < model);
     assert!(model < confirm);
 }
 
@@ -1649,6 +1662,9 @@ fn fake_herdr_with_focus(
         &fake_herdr,
         r#"#!/bin/sh
 if [ "$1" = "pane" ] && [ "$2" = "list" ]; then
+  if [ -n "$COUNTERSPELL_HERDR_LOG" ]; then
+    printf '%s\n' "$*" >> "$COUNTERSPELL_HERDR_LOG"
+  fi
   cat "$COUNTERSPELL_HERDR_FIXTURE"
   exit 0
 fi
@@ -1707,6 +1723,9 @@ fn fake_herdr_with_sessions(
         &fake_herdr,
         r#"#!/bin/sh
 if [ "$1" = "pane" ] && [ "$2" = "list" ]; then
+  if [ -n "$COUNTERSPELL_HERDR_LOG" ]; then
+    printf '%s\n' "$*" >> "$COUNTERSPELL_HERDR_LOG"
+  fi
   cat "$COUNTERSPELL_HERDR_FIXTURE"
   exit 0
 fi

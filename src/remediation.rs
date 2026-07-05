@@ -21,25 +21,15 @@ pub(crate) fn execute_remediation(pane_id: &str, actions: &[PlannedAction]) -> R
             PlannedAction::Compact => {
                 run_herdr_args(&["pane", "run", pane_id, COMPACT_COMMAND])
                     .with_context(|| format!("send compact command to Herdr pane {pane_id}"))?;
-                // Best-effort pacing, IGNORED on failure: panes launched via
-                // `herdr agent start` settle to `done`, not `idle`, so this
-                // wait can time out even though compact finished. Aborting
-                // here would strand the session downgraded with compact spent
-                // (the 2026-07-04 failure class); proceeding is queue-safe —
-                // the /model typed next queues FIFO and executes post-compact,
-                // landing dialog-free on the small context.
-                let _ = run_herdr_args_with_timeout(
-                    &[
-                        "wait",
-                        "agent-status",
-                        pane_id,
-                        "--status",
-                        "idle",
-                        "--timeout",
-                        &COMPACT_WAIT_TIMEOUT_MS.to_string(),
-                    ],
-                    wait_subprocess_timeout(COMPACT_WAIT_TIMEOUT_MS),
-                );
+                // Best-effort pacing: poll until the pane is no longer
+                // `working` instead of `herdr wait --status idle`. Managed
+                // panes (`herdr agent start`) settle to `done`, a status the
+                // wait command cannot express, so the old wait burned its
+                // full timeout (measured live: 184s remediation latency,
+                // 180s of it this wait). Failure or timeout never aborts the
+                // chain — the /model typed next queues FIFO post-compact and
+                // lands dialog-free.
+                wait_while_pane_working(pane_id, COMPACT_WAIT_TIMEOUT_MS);
             }
             PlannedAction::Interrupt => {
                 // Escape ends the current turn (interrupt, not kill).
@@ -89,6 +79,32 @@ pub(crate) fn execute_remediation(pane_id: &str, actions: &[PlannedAction]) -> R
 
 fn wait_subprocess_timeout(wait_ms: u64) -> std::time::Duration {
     std::time::Duration::from_millis(wait_ms + HERDR_WAIT_MARGIN_MS)
+}
+
+/// Best-effort: block until the pane's agent is no longer `working`, or the
+/// timeout elapses. Status-set agnostic on the settled side (idle, done,
+/// blocked, unknown, pane gone all end the wait) so managed panes that never
+/// report `idle` don't burn the full timeout. Sampling errors end the wait
+/// too — the remediation chain is FIFO-queue-safe without pacing.
+fn wait_while_pane_working(pane_id: &str, timeout_ms: u64) {
+    let poll = std::time::Duration::from_millis(2_000);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    // Give herdr a beat to notice the compact turn starting before sampling,
+    // otherwise the pre-compact settled status reads as already-finished.
+    std::thread::sleep(poll);
+    while std::time::Instant::now() < deadline {
+        let Ok(panes) = crate::herdr::load_herdr_panes() else {
+            return;
+        };
+        let working = panes.iter().any(|pane| {
+            crate::herdr::pane_id(pane) == pane_id
+                && pane.agent_status.as_deref() == Some("working")
+        });
+        if !working {
+            return;
+        }
+        std::thread::sleep(poll);
+    }
 }
 
 fn model_switch_confirm_delay() -> std::time::Duration {
