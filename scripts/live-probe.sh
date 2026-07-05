@@ -136,6 +136,19 @@ herdr wait agent-status "$PANE" --status idle --timeout 45000 >/dev/null 2>&1 \
   || true
 sleep 5
 
+# Fresh scratch dirs always trigger the folder-trust dialog; the default
+# ("Yes, I trust this folder") is preselected, so one Enter clears it. Without
+# this, the trigger prompt is typed into the dialog and no session ever starts.
+for _ in 1 2 3; do
+  if herdr pane read "$PANE" --source visible --lines 40 2>/dev/null | grep -qi 'trust this folder'; then
+    log "accepting folder-trust dialog..."
+    herdr pane send-keys "$PANE" Enter >/dev/null
+    sleep 4
+  else
+    break
+  fi
+done
+
 # --- 3. send the trigger prompt ---------------------------------------------
 # This happens BEFORE transcript discovery: Claude Code creates the session
 # .jsonl lazily on the first exchange, so waiting for it pre-prompt deadlocks.
