@@ -29,6 +29,7 @@ fn test_session(now: DateTime<Utc>) -> TranscriptSession {
         cwd: Some("/repo".to_string()),
         last_event_at: now - Duration::seconds(60),
         latest_model: Some("claude-opus-4-1".to_string()),
+        latest_model_at: Some(now - Duration::seconds(60)),
         model_history: vec!["claude-fable-5".to_string(), "claude-opus-4-1".to_string()],
     }
 }
@@ -82,6 +83,107 @@ fn drift_detection_reads_fable_to_opus_from_transcript_jsonl() {
             to: "claude-opus-4-1".to_string()
         }
     );
+}
+
+#[test]
+fn transcript_parser_ignores_angle_bracket_model_sentinels() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("session-1.jsonl");
+    let mut file = File::create(&path).expect("create transcript");
+    writeln!(
+        file,
+        r#"{{"type":"assistant","sessionId":"session-1","timestamp":"2026-07-02T12:00:00Z","cwd":"/repo","message":{{"model":"claude-opus-4-1"}}}}"#
+    )
+    .expect("write opus");
+    writeln!(
+        file,
+        r#"{{"type":"assistant","sessionId":"session-1","timestamp":"2026-07-02T12:01:00Z","cwd":"/repo","message":{{"model":"claude-fable-5"}}}}"#
+    )
+    .expect("write fable");
+    writeln!(
+        file,
+        r#"{{"type":"assistant","sessionId":"session-1","timestamp":"2026-07-02T12:02:00Z","cwd":"/repo","model":"<synthetic>"}}"#
+    )
+    .expect("write synthetic marker");
+    writeln!(
+        file,
+        r#"{{"type":"assistant","sessionId":"session-1","timestamp":"2026-07-02T12:03:00Z","cwd":"/repo","message":{{"model":"<system>"}}}}"#
+    )
+    .expect("write system marker");
+
+    let session = parse_transcript_file(&path, "project".to_string(), Utc::now()).unwrap();
+
+    assert_eq!(session.latest_model.as_deref(), Some("claude-fable-5"));
+    assert_eq!(
+        session.model_history,
+        vec!["claude-opus-4-1".to_string(), "claude-fable-5".to_string()]
+    );
+    assert!(detect_drift(&session, "claude-fable-5").is_none());
+}
+
+#[test]
+fn transcript_parser_keeps_real_downgrade_before_sentinel() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("session-1.jsonl");
+    let mut file = File::create(&path).expect("create transcript");
+    writeln!(
+        file,
+        r#"{{"type":"assistant","sessionId":"session-1","timestamp":"2026-07-02T12:00:00Z","cwd":"/repo","message":{{"model":"claude-fable-5"}}}}"#
+    )
+    .expect("write fable");
+    writeln!(
+        file,
+        r#"{{"type":"assistant","sessionId":"session-1","timestamp":"2026-07-02T12:01:00Z","cwd":"/repo","message":{{"model":"claude-opus-4-1"}}}}"#
+    )
+    .expect("write opus");
+    writeln!(
+        file,
+        r#"{{"type":"assistant","sessionId":"session-1","timestamp":"2026-07-02T12:02:00Z","cwd":"/repo","model":"<synthetic>"}}"#
+    )
+    .expect("write synthetic marker");
+
+    let session = parse_transcript_file(&path, "project".to_string(), Utc::now()).unwrap();
+    let drift = detect_drift(&session, "claude-fable-5").expect("drift");
+
+    assert_eq!(session.latest_model.as_deref(), Some("claude-opus-4-1"));
+    assert_eq!(
+        session.model_history,
+        vec!["claude-fable-5".to_string(), "claude-opus-4-1".to_string()]
+    );
+    assert_eq!(
+        drift,
+        ModelDrift {
+            from: "claude-fable-5".to_string(),
+            to: "claude-opus-4-1".to_string()
+        }
+    );
+}
+
+#[test]
+fn drift_detection_defensively_ignores_sentinel_latest_model() {
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let mut session = test_session(now);
+    session.latest_model = Some("<synthetic>".to_string());
+    session.model_history = vec![
+        "claude-fable-5".to_string(),
+        "claude-opus-4-1".to_string(),
+        "<synthetic>".to_string(),
+    ];
+
+    let drift = detect_drift(&session, "claude-fable-5").expect("drift");
+
+    assert_eq!(
+        drift,
+        ModelDrift {
+            from: "claude-fable-5".to_string(),
+            to: "claude-opus-4-1".to_string()
+        }
+    );
+
+    session.model_history = vec!["claude-fable-5".to_string(), "<synthetic>".to_string()];
+    assert!(detect_drift(&session, "claude-fable-5").is_none());
 }
 
 #[test]

@@ -3,13 +3,14 @@ use chrono::{DateTime, Duration, Utc};
 
 use crate::defaults::{
     COMPACT_COMMAND, COMPACT_WAIT_TIMEOUT_MS, DEFAULT_TARGET_MODEL, HERDR_WAIT_MARGIN_MS,
-    INTERRUPT_WAIT_TIMEOUT_MS, PENDING_COMPACT_EXPIRY_SECONDS,
+    INTERRUPT_WAIT_TIMEOUT_MS, MODEL_SWITCH_CONFIRM_DELAY_MS, PENDING_COMPACT_EXPIRY_SECONDS,
 };
 use crate::herdr::{pane_session_id, run_herdr_args, run_herdr_args_with_timeout, HerdrPane};
 use crate::model::{
     Config, GateBlocker, GateDecision, ModelDrift, PlannedAction, RemediationPlan, SessionState,
     TargetMatch, TranscriptSession,
 };
+use crate::sessions::is_model_sentinel;
 use crate::util::unix_to_utc;
 
 pub(crate) const AUTO_FABLE_REASON: &str = "auto:fable";
@@ -67,6 +68,12 @@ pub(crate) fn execute_remediation(pane_id: &str, actions: &[PlannedAction]) -> R
                 let command = format!("/model {model}");
                 run_herdr_args(&["pane", "run", pane_id, command.as_str()])
                     .with_context(|| format!("send model switch to Herdr pane {pane_id}"))?;
+                let delay = model_switch_confirm_delay();
+                if delay > std::time::Duration::ZERO {
+                    std::thread::sleep(delay);
+                }
+                run_herdr_args(&["pane", "send-keys", pane_id, "enter"])
+                    .with_context(|| format!("confirm model switch in Herdr pane {pane_id}"))?;
             }
         }
     }
@@ -76,6 +83,14 @@ pub(crate) fn execute_remediation(pane_id: &str, actions: &[PlannedAction]) -> R
 
 fn wait_subprocess_timeout(wait_ms: u64) -> std::time::Duration {
     std::time::Duration::from_millis(wait_ms + HERDR_WAIT_MARGIN_MS)
+}
+
+fn model_switch_confirm_delay() -> std::time::Duration {
+    let delay_ms = std::env::var("COUNTERSPELL_MODEL_SWITCH_CONFIRM_DELAY_MS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(MODEL_SWITCH_CONFIRM_DELAY_MS);
+    std::time::Duration::from_millis(delay_ms)
 }
 
 pub(crate) fn remediation_plan(
@@ -88,7 +103,7 @@ pub(crate) fn remediation_plan(
     let target = target_for_session(session, config);
     let drift = target
         .as_ref()
-        .and_then(|target| detect_drift(session, &target.target_model));
+        .and_then(|target| detect_actionable_drift(session, &target.target_model, state));
 
     // Fast path: a downgraded session must not keep working on the wrong
     // model, and remediation must not depend on ever SAMPLING the pane idle
@@ -235,7 +250,12 @@ pub(crate) fn format_target_match(target: &TargetMatch) -> String {
 }
 
 pub(crate) fn detect_drift(session: &TranscriptSession, desired_model: &str) -> Option<ModelDrift> {
-    let latest = session.latest_model.as_ref()?;
+    let desired_model = desired_model.trim();
+    if desired_model.is_empty() || is_model_sentinel(desired_model) {
+        return None;
+    }
+
+    let latest = latest_real_model(session)?;
     if latest == desired_model {
         return None;
     }
@@ -243,14 +263,59 @@ pub(crate) fn detect_drift(session: &TranscriptSession, desired_model: &str) -> 
     let (from, to) = if session
         .model_history
         .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty() && !is_model_sentinel(model))
         .any(|model| model == desired_model)
     {
-        (desired_model.to_string(), latest.clone())
+        (desired_model.to_string(), latest.to_string())
     } else {
-        (latest.clone(), desired_model.to_string())
+        (latest.to_string(), desired_model.to_string())
     };
 
     Some(ModelDrift { from, to })
+}
+
+fn latest_real_model(session: &TranscriptSession) -> Option<&str> {
+    session
+        .latest_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty() && !is_model_sentinel(model))
+        .or_else(|| {
+            session
+                .model_history
+                .iter()
+                .rev()
+                .map(String::as_str)
+                .map(str::trim)
+                .find(|model| !model.is_empty() && !is_model_sentinel(model))
+        })
+}
+
+pub(crate) fn detect_actionable_drift(
+    session: &TranscriptSession,
+    desired_model: &str,
+    state: Option<&SessionState>,
+) -> Option<ModelDrift> {
+    let drift = detect_drift(session, desired_model)?;
+    if switch_recorded_after_latest_model(session, state) {
+        return None;
+    }
+    Some(drift)
+}
+
+fn switch_recorded_after_latest_model(
+    session: &TranscriptSession,
+    state: Option<&SessionState>,
+) -> bool {
+    let Some(latest_model_at) = session.latest_model_at else {
+        return false;
+    };
+    state
+        .and_then(|state| state.last_action_unix)
+        .and_then(unix_to_utc)
+        .is_some_and(|last_action_at| last_action_at >= latest_model_at)
 }
 
 pub(crate) fn gate_decision_for_matches(

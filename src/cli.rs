@@ -24,7 +24,7 @@ use crate::indicators::{
 };
 use crate::model::FileConfig;
 use crate::output::{print_status, print_status_json, print_watch};
-use crate::remediation::detect_drift;
+use crate::remediation::detect_actionable_drift;
 use crate::sessions::discover_recent_sessions;
 use crate::status::{status_rows, watch_rows};
 use crate::store::{load_store, save_store, state_path};
@@ -616,6 +616,7 @@ fn status(cli: &Cli, args: &StatusArgs) -> Result<()> {
 fn annotate_herdr(cli: &Cli) -> Result<()> {
     let config = load_config(cli)?;
     let now = Utc::now();
+    let store = load_store(&state_path(cli.state.clone())?)?;
     let sessions = discover_recent_sessions(&config, now)?;
     let panes = load_herdr_panes().context("load Herdr panes for annotation")?;
     let mut annotations = BTreeMap::new();
@@ -627,7 +628,8 @@ fn annotate_herdr(cli: &Cli) -> Result<()> {
         let matching_panes =
             matching_panes_for_session(&session.session_id, session.cwd.as_deref(), &panes);
         let title = format!("Counterspell: {}", target.target_model);
-        let status = detect_drift(session, &target.target_model)
+        let state = store.sessions.get(&session.session_id);
+        let status = detect_actionable_drift(session, &target.target_model, state)
             .map(|drift| format!("drift {}->{}", drift.from, drift.to))
             .unwrap_or_else(|| "watched".to_string());
 

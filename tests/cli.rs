@@ -865,9 +865,12 @@ target_model = "claude-fable-5"
     let switch_at = log
         .find("pane run w13:p1 /model claude-fable-5")
         .expect("switch must be sent in the same pass, never left for a later tick");
+    let confirm_at = log
+        .find("pane send-keys w13:p1 enter")
+        .expect("model switch confirmation must be sent in the same pass");
     assert!(
-        escape_at < compact_at && compact_at < switch_at,
-        "chain must run escape -> compact -> switch in order, log: {log}"
+        escape_at < compact_at && compact_at < switch_at && switch_at < confirm_at,
+        "chain must run escape -> compact -> switch -> confirm in order, log: {log}"
     );
 
     // Pass 2: the switch just fired, so the session is debounced — a second
@@ -886,9 +889,14 @@ target_model = "claude-fable-5"
         "the follow-up pass must not switch again, log: {log}"
     );
     assert_eq!(
-        log.matches("send-keys").count(),
+        log.matches("pane send-keys w13:p1 escape").count(),
         1,
         "the follow-up pass must not escape again, log: {log}"
+    );
+    assert_eq!(
+        log.matches("pane send-keys w13:p1 enter").count(),
+        1,
+        "the follow-up pass must not confirm again, log: {log}"
     );
 }
 
@@ -1202,6 +1210,89 @@ target_model = "claude-fable-5"
 }
 
 #[test]
+fn watch_suppresses_stale_drift_after_recorded_switch_until_transcript_advances() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let cwd = temp.path().join("repo");
+    let state = temp.path().join("counterspell-state.json");
+    let herdr_log = temp.path().join("herdr.log");
+    fs::create_dir_all(&cwd).expect("cwd");
+
+    let project_dir = projects.join("-Users-phaedrus-Development-adminifi");
+    fs::create_dir_all(&project_dir).expect("project dir");
+    fs::write(
+        project_dir.join("adminifi-session.jsonl"),
+        format!(
+            concat!(
+                "{{\"type\":\"assistant\",\"sessionId\":\"adminifi-session\",\"timestamp\":\"2026-07-02T12:00:00Z\",\"cwd\":\"{}\",\"message\":{{\"model\":\"claude-fable-5\"}}}}\n",
+                "{{\"type\":\"assistant\",\"sessionId\":\"adminifi-session\",\"timestamp\":\"2026-07-02T12:01:00Z\",\"cwd\":\"{}\",\"message\":{{\"model\":\"claude-opus-4-8\"}}}}\n",
+            ),
+            cwd.display(),
+            cwd.display()
+        ),
+    )
+    .expect("transcript");
+    let last_switch_unix = chrono::DateTime::parse_from_rfc3339("2026-07-02T12:02:00Z")
+        .unwrap()
+        .timestamp();
+    let cwd_text = cwd.display().to_string();
+    fs::write(
+        &state,
+        serde_json::json!({
+            "version": 2,
+            "sessions": {
+                "adminifi-session": {
+                    "session_id": "adminifi-session",
+                    "cwd": cwd_text,
+                    "last_action_unix": last_switch_unix
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("state");
+    let config = write_config(
+        temp.path(),
+        r#"
+[[targets]]
+session_id = "adminifi-session"
+target_model = "claude-fable-5"
+"#,
+    );
+    let (fake_herdr, fixture) = fake_herdr(
+        temp.path(),
+        &[("w13:p1", &cwd, "claude", "idle", "adminifi")],
+    );
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("--recent-hours")
+        .arg("999")
+        .arg("watch")
+        .arg("--arm")
+        .env("HOME", temp.path())
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .env("COUNTERSPELL_HERDR_LOG", &herdr_log)
+        .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("compact then switch").not())
+        .stdout(predicate::str::contains("switch:claude-fable-5").not());
+
+    assert!(
+        !herdr_log.exists(),
+        "stale drift behind a recorded switch must not inject into Herdr"
+    );
+}
+
+#[test]
 fn watch_arm_injects_compact_then_wait_then_model_switch() {
     let temp = tempfile::tempdir().expect("tempdir");
     let projects = temp.path().join("projects");
@@ -1258,8 +1349,12 @@ target_model = "claude-fable-5"
     let model = log
         .find("pane run w13:p1 /model claude-fable-5")
         .expect("model");
+    let confirm = log
+        .find("pane send-keys w13:p1 enter")
+        .expect("model confirmation");
     assert!(compact < wait);
     assert!(wait < model);
+    assert!(model < confirm);
 }
 
 #[test]

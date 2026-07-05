@@ -78,6 +78,7 @@ pub(crate) fn parse_transcript_file(
     let mut cwd = None;
     let mut last_event_at = None;
     let mut latest_model = None;
+    let mut latest_model_at = None;
     let mut model_history = Vec::new();
 
     for line in reader.lines() {
@@ -91,17 +92,18 @@ pub(crate) fn parse_transcript_file(
         if let Some(value_cwd) = value.get("cwd").and_then(Value::as_str) {
             cwd = Some(value_cwd.to_string());
         }
-        if let Some(timestamp) = value
+        let event_at = value
             .get("timestamp")
             .and_then(Value::as_str)
-            .and_then(parse_rfc3339_utc)
-        {
+            .and_then(parse_rfc3339_utc);
+        if let Some(timestamp) = event_at {
             last_event_at = Some(timestamp);
         }
         if let Some(model) = transcript_model(&value) {
             if model_history.last() != Some(&model) {
                 model_history.push(model.clone());
             }
+            latest_model_at = event_at.or(last_event_at);
             latest_model = Some(model);
         }
     }
@@ -112,6 +114,7 @@ pub(crate) fn parse_transcript_file(
         cwd,
         last_event_at: last_event_at.unwrap_or(file_modified_at),
         latest_model,
+        latest_model_at,
         model_history,
     })
 }
@@ -122,6 +125,11 @@ fn transcript_model(value: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .or_else(|| value.pointer("/message/model").and_then(Value::as_str))
         .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.is_empty() && !is_model_sentinel(value))
         .map(str::to_string)
+}
+
+pub(crate) fn is_model_sentinel(model: &str) -> bool {
+    let model = model.trim();
+    model.len() >= 2 && model.starts_with('<') && model.ends_with('>')
 }

@@ -75,6 +75,7 @@ pub(crate) struct TranscriptSession {
     pub(crate) cwd: Option<String>,
     pub(crate) last_event_at: DateTime<Utc>,
     pub(crate) latest_model: Option<String>,
+    pub(crate) latest_model_at: Option<DateTime<Utc>>,
     pub(crate) model_history: Vec<String>,
 }
 

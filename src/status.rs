@@ -5,9 +5,9 @@ use crate::feed::FeedEvent;
 use crate::herdr::{matching_panes_for_session, pane_id, HerdrPane};
 use crate::model::{Config, SessionState, StatusRow, TranscriptSession, WatchRow, WatchStore};
 use crate::remediation::{
-    describe_actions, describe_gate, describe_watch_actions, detect_drift, execute_remediation,
-    format_target_match, gate_decision_for_matches, is_auto_fable_target, remediation_plan,
-    status_state, target_for_session,
+    describe_actions, describe_gate, describe_watch_actions, detect_actionable_drift,
+    execute_remediation, format_target_match, gate_decision_for_matches, is_auto_fable_target,
+    remediation_plan, status_state, target_for_session,
 };
 use crate::util::{human_age, join_or_dash, short_session};
 
@@ -33,15 +33,15 @@ pub(crate) fn status_rows(
                 join_or_dash(matching_panes.iter().map(|pane| pane_id(pane)))
             };
             let target = target_for_session(session, config);
+            let state = store.sessions.get(&session.session_id);
             let drift = target
                 .as_ref()
                 .map(|target| {
-                    detect_drift(session, &target.target_model)
+                    detect_actionable_drift(session, &target.target_model, state)
                         .map(|drift| format!("{}->{}", drift.from, drift.to))
                         .unwrap_or_else(|| "ok".to_string())
                 })
                 .unwrap_or_else(|| "ignored".to_string());
-            let state = store.sessions.get(&session.session_id);
             let gate = gate_decision_for_matches(session, &matching_panes, state, config, now);
 
             StatusRow {
@@ -130,7 +130,7 @@ pub(crate) fn watch_rows(
         let target = target_for_session(session, config);
         let drift = target
             .as_ref()
-            .and_then(|target| detect_drift(session, &target.target_model));
+            .and_then(|target| detect_actionable_drift(session, &target.target_model, state));
         let gate = describe_gate(&plan.gate);
         let pane = event_pane(&matching_panes);
 

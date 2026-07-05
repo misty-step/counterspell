@@ -4,6 +4,7 @@ pub(crate) const DEFAULT_TRANSCRIPT_QUIET_SECONDS: u64 = 30;
 pub(crate) const DEFAULT_DEBOUNCE_SECONDS: u64 = 300;
 pub(crate) const DEFAULT_TARGET_MODEL: &str = "claude-fable-5";
 pub(crate) const COMPACT_WAIT_TIMEOUT_MS: u64 = 180_000;
+pub(crate) const MODEL_SWITCH_CONFIRM_DELAY_MS: u64 = 200;
 /// Best-effort pause for Escape to end the current turn so the queued
 /// compact executes immediately instead of at the end of a resumed turn.
 /// Failure is ignored — the chain is queue-safe without it.
