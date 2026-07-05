@@ -123,9 +123,11 @@ fi
 log "pane: $PANE"
 
 cleanup() {
-  log "cleanup: closing pane $PANE"
+  log "cleanup: closing pane $PANE and workspace $WS"
   herdr pane send-keys "$PANE" Escape >/dev/null 2>&1 || true
   herdr pane close "$PANE" >/dev/null 2>&1 || true
+  herdr workspace close "$WS" >/dev/null 2>&1 \
+    || herdr workspace delete "$WS" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
