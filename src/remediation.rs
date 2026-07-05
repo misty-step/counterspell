@@ -21,7 +21,14 @@ pub(crate) fn execute_remediation(pane_id: &str, actions: &[PlannedAction]) -> R
             PlannedAction::Compact => {
                 run_herdr_args(&["pane", "run", pane_id, COMPACT_COMMAND])
                     .with_context(|| format!("send compact command to Herdr pane {pane_id}"))?;
-                run_herdr_args_with_timeout(
+                // Best-effort pacing, IGNORED on failure: panes launched via
+                // `herdr agent start` settle to `done`, not `idle`, so this
+                // wait can time out even though compact finished. Aborting
+                // here would strand the session downgraded with compact spent
+                // (the 2026-07-04 failure class); proceeding is queue-safe —
+                // the /model typed next queues FIFO and executes post-compact,
+                // landing dialog-free on the small context.
+                let _ = run_herdr_args_with_timeout(
                     &[
                         "wait",
                         "agent-status",
@@ -32,8 +39,7 @@ pub(crate) fn execute_remediation(pane_id: &str, actions: &[PlannedAction]) -> R
                         &COMPACT_WAIT_TIMEOUT_MS.to_string(),
                     ],
                     wait_subprocess_timeout(COMPACT_WAIT_TIMEOUT_MS),
-                )
-                .with_context(|| format!("wait for compact to finish in Herdr pane {pane_id}"))?;
+                );
             }
             PlannedAction::Interrupt => {
                 // Escape ends the current turn (interrupt, not kill).
@@ -333,7 +339,11 @@ pub(crate) fn gate_decision_for_matches(
 
     match matching_panes {
         [] => blockers.push(GateBlocker::NoPane),
-        [pane] if pane.agent_status.as_deref() == Some("idle") => {}
+        // `done` is herdr's settled state for `herdr agent start` panes whose
+        // turn finished: the TUI sits at the prompt awaiting input, exactly as
+        // injectable as `idle`. Treating it as busy left managed lanes
+        // permanently unremediated (probe pane w3H:p2, 2026-07-04).
+        [pane] if matches!(pane.agent_status.as_deref(), Some("idle" | "done")) => {}
         [pane] => blockers.push(GateBlocker::PaneBusy(
             pane.agent_status
                 .clone()

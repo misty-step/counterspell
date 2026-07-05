@@ -845,3 +845,31 @@ fn dashboard_render_marks_fable_history_sessions_auto() {
     assert!(html.contains("target claude-fable-5"));
     assert!(!html.contains(r#"<button type="submit">Enable</button>"#));
 }
+
+#[test]
+fn done_pane_is_remediable_like_idle() {
+    // herdr reports `done` (turn complete, awaiting input) for panes launched
+    // via `herdr agent start` — observed live 2026-07-04: probe pane w3H:p2
+    // sat interactive at the prompt for 4+ minutes while the gate blocked
+    // every tick with pane-done. A done pane accepts keystrokes exactly like
+    // an idle one; refusing it means managed lanes are never remediated.
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let config = test_config();
+    let session = test_session(now);
+    let mut pane = idle_pane();
+    pane.agent_status = Some("done".to_string());
+    let panes = [&pane];
+
+    assert!(gate_decision_for_matches(&session, &panes, None, &config, now).is_allowed());
+
+    let plan = remediation_plan(&session, &panes, None, &config, now);
+    assert_eq!(
+        plan.actions,
+        vec![
+            PlannedAction::Compact,
+            PlannedAction::SwitchModel("claude-fable-5".to_string()),
+        ]
+    );
+}
