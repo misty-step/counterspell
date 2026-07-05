@@ -129,25 +129,32 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# wait for the claude TUI to come up
-log "waiting for claude to be ready..."
-herdr wait agent-status "$PANE" --status idle --timeout 45000 >/dev/null 2>&1 \
-  || herdr wait agent-status "$PANE" --status working --timeout 15000 >/dev/null 2>&1 \
-  || true
-sleep 5
-
-# Fresh scratch dirs always trigger the folder-trust dialog; the default
-# ("Yes, I trust this folder") is preselected, so one Enter clears it. Without
-# this, the trigger prompt is typed into the dialog and no session ever starts.
-for _ in 1 2 3; do
-  if herdr pane read "$PANE" --source visible --lines 40 2>/dev/null | grep -qi 'trust this folder'; then
+# Wait for the claude TUI by reading actual pane content — `herdr wait
+# agent-status` returns instantly for a pane with no reported status, so it is
+# useless as a readiness gate. Two screens matter:
+#   - the folder-trust dialog (fresh scratch cwds always trigger it): the
+#     trusting option is preselected, one Enter clears it;
+#   - the real input screen, discriminated by its token-count footer, which
+#     the trust dialog lacks.
+log "waiting for claude TUI (accepting trust dialog if shown)..."
+TUI_READY=""
+deadline=$(( $(date +%s) + 60 ))
+while [ "$(date +%s)" -lt "$deadline" ]; do
+  screen=$(herdr pane read "$PANE" --source visible --lines 40 2>/dev/null || true)
+  if printf '%s' "$screen" | grep -qi 'trust this folder'; then
     log "accepting folder-trust dialog..."
     herdr pane send-keys "$PANE" Enter >/dev/null
-    sleep 4
-  else
+    sleep 3
+    continue
+  fi
+  if printf '%s' "$screen" | grep -q 'tokens'; then
+    TUI_READY=1
     break
   fi
+  sleep 2
 done
+[ -n "$TUI_READY" ] || fail "claude TUI never became ready in pane $PANE"
+sleep 2
 
 # --- 3. send the trigger prompt ---------------------------------------------
 # This happens BEFORE transcript discovery: Claude Code creates the session
