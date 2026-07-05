@@ -1,8 +1,8 @@
 use assert_cmd::prelude::*;
 use predicates::prelude::*;
 use std::fs;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpStream;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -1544,8 +1544,7 @@ fn dashboard_rejects_target_enable_without_origin_or_referer() {
     let temp = tempfile::tempdir().expect("tempdir");
     let config = write_config(temp.path(), "");
 
-    let port = free_port();
-    let mut server = spawn_dashboard_once(temp.path(), &config, port);
+    let (mut server, port) = spawn_dashboard_once(temp.path(), &config);
     let response = send_raw_request(
         port,
         "POST",
@@ -1575,8 +1574,7 @@ fn dashboard_rejects_target_enable_with_mismatched_origin() {
     let temp = tempfile::tempdir().expect("tempdir");
     let config = write_config(temp.path(), "");
 
-    let port = free_port();
-    let mut server = spawn_dashboard_once(temp.path(), &config, port);
+    let (mut server, port) = spawn_dashboard_once(temp.path(), &config);
     let response = send_raw_request(
         port,
         "POST",
@@ -1606,8 +1604,7 @@ fn dashboard_accepts_target_enable_with_matching_origin() {
     let temp = tempfile::tempdir().expect("tempdir");
     let config = write_config(temp.path(), "");
 
-    let port = free_port();
-    let mut server = spawn_dashboard_once(temp.path(), &config, port);
+    let (mut server, port) = spawn_dashboard_once(temp.path(), &config);
     let origin = format!("http://127.0.0.1:{port}");
     let response = send_raw_request(
         port,
@@ -1645,8 +1642,7 @@ target_model = "claude-fable-5"
 "#,
     );
 
-    let port = free_port();
-    let mut server = spawn_dashboard_once(temp.path(), &config, port);
+    let (mut server, port) = spawn_dashboard_once(temp.path(), &config);
     let response = send_raw_request(
         port,
         "POST",
@@ -1903,36 +1899,38 @@ fn chmod_exec(path: &Path) {
     fs::set_permissions(path, perms).expect("chmod");
 }
 
-/// Reserve an ephemeral loopback port, then release it. There's an inherent
-/// small race until the spawned dashboard binds it, but it's the standard
-/// pattern for handing a test server an OS-assigned free port.
-fn free_port() -> u16 {
-    TcpListener::bind(("127.0.0.1", 0))
-        .expect("bind ephemeral port")
-        .local_addr()
-        .expect("local addr")
-        .port()
-}
-
 /// Spawn `counterspell ui --once` in the background against an empty Herdr
 /// fixture (the /targets/enable and /targets/disable routes never call
 /// Herdr) so raw HTTP requests can be sent at it to exercise the CSRF guard.
-fn spawn_dashboard_once(temp_path: &Path, config: &Path, port: u16) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_counterspell"))
+fn spawn_dashboard_once(temp_path: &Path, config: &Path) -> (Child, u16) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_counterspell"))
         .arg("--config")
         .arg(config)
         .arg("--state")
         .arg(temp_path.join("state.json"))
         .arg("ui")
         .arg("--port")
-        .arg(port.to_string())
+        .arg("0")
         .arg("--once")
         .arg("--no-open")
         .env("HOME", temp_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn dashboard")
+        .expect("spawn dashboard");
+    let stdout = child.stdout.take().expect("dashboard stdout");
+    let mut line = String::new();
+    BufReader::new(stdout)
+        .read_line(&mut line)
+        .expect("read dashboard startup line");
+    let port = line
+        .trim()
+        .rsplit(':')
+        .next()
+        .expect("dashboard startup port")
+        .parse::<u16>()
+        .expect("parse dashboard startup port");
+    (child, port)
 }
 
 /// Connect with retries rather than probing readiness separately: the
