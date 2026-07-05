@@ -70,9 +70,21 @@ fi
 TRIGGER_PROMPT="$(cat "$CS_TRIGGER_FILE")"
 
 # --- 0. daemon must be armed & loaded ---------------------------------------
-if ! launchctl list 2>/dev/null | grep -q 'com.misty-step.counterspell.watch-arm'; then
-  fail "watch-arm LaunchAgent not loaded — the armed daemon is what we test"
-fi
+# Primary check: the watch log heartbeat. The arm execs `counterspell watch`
+# every 10s and every tick appends to the log, so a fresh mtime proves the
+# daemon is live. launchctl is only a fallback — it cannot see user
+# LaunchAgents from detached contexts (cron, background runners), where this
+# probe legitimately runs.
+daemon_live() {
+  if [ -f "$WATCH_LOG" ]; then
+    local now mtime
+    now=$(date +%s)
+    mtime=$(stat -f %m "$WATCH_LOG" 2>/dev/null || stat -c %Y "$WATCH_LOG" 2>/dev/null || echo 0)
+    [ $(( now - mtime )) -le 30 ] && return 0
+  fi
+  launchctl list 2>/dev/null | grep -q 'com.misty-step.counterspell.watch-arm'
+}
+daemon_live || fail "watch-arm daemon not live — no watch-log heartbeat in 30s and LaunchAgent not visible"
 [ -f "$WATCH_LOG" ] || : > "$WATCH_LOG"
 WATCH_LOG_START_LINES=$(wc -l < "$WATCH_LOG" | tr -d ' ')
 log "watch log baseline: ${WATCH_LOG_START_LINES} lines"
