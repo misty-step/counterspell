@@ -108,9 +108,11 @@ log "expecting transcripts under: $PROJ_DIR"
 
 # --- 2. launch claude on Fable via herdr agent start ------------------------
 log "launching claude --model ${TARGET_MODEL} ..."
+# NOTE: argv after `--` is the FULL command line (herdr replaces the agent's
+# default command), so the binary name must be repeated.
 START_JSON=$(herdr agent start claude --workspace "$WS" --cwd "$CWD" --no-focus \
-              -- --model "$TARGET_MODEL")
-PANE=$(printf '%s' "$START_JSON" | jq -r '.result.pane_id // .result.pane.pane_id // empty')
+              -- claude --model "$TARGET_MODEL")
+PANE=$(printf '%s' "$START_JSON" | jq -r '.result.agent.pane_id // .result.pane_id // .result.pane.pane_id // empty')
 if [ -z "$PANE" ]; then
   PANE=$(herdr pane list --workspace "$WS" | jq -r '.result.panes[0].pane_id')
 fi
