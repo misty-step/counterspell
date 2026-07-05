@@ -246,6 +246,18 @@ pub fn run(cli: Cli) -> Result<()> {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn test_cli_with_config(config: PathBuf) -> Cli {
+    Cli {
+        annotate_herdr: false,
+        state: None,
+        config: Some(config),
+        projects_dir: None,
+        recent_hours: None,
+        command: None,
+    }
+}
+
 fn init(cli: &Cli, args: &InitArgs) -> Result<()> {
     let home = home_dir()?;
     let path = config_path(cli.config.clone(), &home);

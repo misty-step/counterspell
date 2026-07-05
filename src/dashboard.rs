@@ -244,14 +244,28 @@ fn handle_connection(mut stream: TcpStream, cli: &Cli) -> Result<()> {
     let local_addr = stream
         .local_addr()
         .context("resolve dashboard local address")?;
-    let mut reader = BufReader::new(stream.try_clone().context("clone dashboard stream")?);
+    let read_stream = stream.try_clone().context("clone dashboard stream")?;
+    handle_request(read_stream, &mut stream, cli, local_addr)
+}
+
+fn handle_request<R, W>(
+    read_stream: R,
+    stream: &mut W,
+    cli: &Cli,
+    local_addr: SocketAddr,
+) -> Result<()>
+where
+    R: Read,
+    W: Write,
+{
+    let mut reader = BufReader::new(read_stream);
     let request = read_request(&mut reader)?;
 
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/" | "/index.html") => {
             let snapshot = load_dashboard_snapshot(cli)?;
             respond(
-                &mut stream,
+                stream,
                 "200 OK",
                 "text/html; charset=utf-8",
                 render_dashboard_html(&snapshot),
@@ -260,7 +274,7 @@ fn handle_connection(mut stream: TcpStream, cli: &Cli) -> Result<()> {
         ("GET", "/status.json") => {
             let snapshot = load_dashboard_snapshot(cli)?;
             respond(
-                &mut stream,
+                stream,
                 "200 OK",
                 "application/json; charset=utf-8",
                 render_dashboard_json(&snapshot),
@@ -268,23 +282,21 @@ fn handle_connection(mut stream: TcpStream, cli: &Cli) -> Result<()> {
         }
         ("POST", "/targets/enable") => {
             if !csrf_allowed(&request.headers, local_addr) {
-                return respond_forbidden(&mut stream);
+                return respond_forbidden(stream);
             }
             enable_session_target(cli, &request.form)?;
-            redirect_home(&mut stream)
+            redirect_home(stream)
         }
         ("POST", "/targets/disable") => {
             if !csrf_allowed(&request.headers, local_addr) {
-                return respond_forbidden(&mut stream);
+                return respond_forbidden(stream);
             }
             disable_session_target(cli, &request.form)?;
-            redirect_home(&mut stream)
+            redirect_home(stream)
         }
-        ("GET", "/favicon.ico") => {
-            respond(&mut stream, "204 No Content", "text/plain", String::new())
-        }
+        ("GET", "/favicon.ico") => respond(stream, "204 No Content", "text/plain", String::new()),
         _ => respond(
-            &mut stream,
+            stream,
             "404 Not Found",
             "text/plain; charset=utf-8",
             "not found\n".to_string(),
@@ -317,7 +329,7 @@ fn csrf_allowed(headers: &BTreeMap<String, String>, local_addr: SocketAddr) -> b
     false
 }
 
-fn respond_forbidden(stream: &mut TcpStream) -> Result<()> {
+fn respond_forbidden<W: Write>(stream: &mut W) -> Result<()> {
     respond(
         stream,
         "403 Forbidden",
@@ -326,7 +338,7 @@ fn respond_forbidden(stream: &mut TcpStream) -> Result<()> {
     )
 }
 
-fn read_request(reader: &mut BufReader<TcpStream>) -> Result<Request> {
+fn read_request<R: Read>(reader: &mut BufReader<R>) -> Result<Request> {
     let mut request_line = String::new();
     reader
         .read_line(&mut request_line)
@@ -402,7 +414,7 @@ fn form_value<'a>(form: &'a BTreeMap<String, String>, key: &str) -> Result<&'a s
         .ok_or_else(|| anyhow::anyhow!("missing form field {key}"))
 }
 
-fn respond(stream: &mut TcpStream, status: &str, content_type: &str, body: String) -> Result<()> {
+fn respond<W: Write>(stream: &mut W, status: &str, content_type: &str, body: String) -> Result<()> {
     let response = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         body.len(),
@@ -413,7 +425,7 @@ fn respond(stream: &mut TcpStream, status: &str, content_type: &str, body: Strin
         .context("write dashboard response")
 }
 
-fn redirect_home(stream: &mut TcpStream) -> Result<()> {
+fn redirect_home<W: Write>(stream: &mut W) -> Result<()> {
     let response =
         "HTTP/1.1 303 See Other\r\nLocation: /\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
     stream
@@ -551,4 +563,156 @@ fn open_url(url: &str) -> Result<()> {
         bail!("open exited with {status}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+    use std::path::{Path, PathBuf};
+
+    const TEST_PORT: u16 = 18765;
+
+    fn write_config(temp_path: &Path, contents: &str) -> PathBuf {
+        let path = temp_path.join("counterspell.toml");
+        std::fs::write(&path, contents).expect("config");
+        path
+    }
+
+    fn send_dashboard_request(
+        config: &Path,
+        method: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: &str,
+    ) -> String {
+        let cli = crate::cli::test_cli_with_config(config.to_path_buf());
+        let mut request = format!(
+            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{TEST_PORT}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n",
+            body.len()
+        );
+        for (name, value) in headers {
+            request.push_str(&format!("{name}: {value}\r\n"));
+        }
+        request.push_str("Connection: close\r\n\r\n");
+        request.push_str(body);
+
+        let mut response = Vec::new();
+        handle_request(
+            Cursor::new(request.into_bytes()),
+            &mut response,
+            &cli,
+            SocketAddr::from(([127, 0, 0, 1], TEST_PORT)),
+        )
+        .expect("handle dashboard request");
+        String::from_utf8(response).expect("dashboard response")
+    }
+
+    #[test]
+    fn dashboard_rejects_target_enable_without_origin_or_referer() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = write_config(temp.path(), "");
+
+        let response = send_dashboard_request(
+            &config,
+            "POST",
+            "/targets/enable",
+            &[],
+            "session_id=csrf-reject-session",
+        );
+
+        assert!(
+            response.starts_with("HTTP/1.1 403"),
+            "expected 403, got: {response}"
+        );
+        assert!(
+            !std::fs::read_to_string(&config)
+                .expect("config")
+                .contains("csrf-reject-session"),
+            "target must not be written when Origin/Referer is missing"
+        );
+    }
+
+    #[test]
+    fn dashboard_rejects_target_enable_with_mismatched_origin() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = write_config(temp.path(), "");
+
+        let response = send_dashboard_request(
+            &config,
+            "POST",
+            "/targets/enable",
+            &[("Origin", "http://evil.example")],
+            "session_id=csrf-reject-session",
+        );
+
+        assert!(
+            response.starts_with("HTTP/1.1 403"),
+            "expected 403, got: {response}"
+        );
+        assert!(
+            !std::fs::read_to_string(&config)
+                .expect("config")
+                .contains("csrf-reject-session"),
+            "target must not be written when Origin does not match the dashboard's own origin"
+        );
+    }
+
+    #[test]
+    fn dashboard_accepts_target_enable_with_matching_origin() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = write_config(temp.path(), "");
+        let origin = format!("http://127.0.0.1:{TEST_PORT}");
+
+        let response = send_dashboard_request(
+            &config,
+            "POST",
+            "/targets/enable",
+            &[("Origin", &origin)],
+            "session_id=csrf-accept-session",
+        );
+
+        assert!(
+            response.starts_with("HTTP/1.1 303"),
+            "expected 303 redirect, got: {response}"
+        );
+        assert!(
+            std::fs::read_to_string(&config)
+                .expect("config")
+                .contains("csrf-accept-session"),
+            "target must be written when Origin matches the dashboard's own origin"
+        );
+    }
+
+    #[test]
+    fn dashboard_rejects_target_disable_without_origin_or_referer() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = write_config(
+            temp.path(),
+            r#"
+[[targets]]
+session_id = "csrf-disable-session"
+target_model = "claude-fable-5"
+"#,
+        );
+
+        let response = send_dashboard_request(
+            &config,
+            "POST",
+            "/targets/disable",
+            &[],
+            "session_id=csrf-disable-session",
+        );
+
+        assert!(
+            response.starts_with("HTTP/1.1 403"),
+            "expected 403, got: {response}"
+        );
+        assert!(
+            std::fs::read_to_string(&config)
+                .expect("config")
+                .contains("csrf-disable-session"),
+            "target must not be removed when Origin/Referer is missing"
+        );
+    }
 }
