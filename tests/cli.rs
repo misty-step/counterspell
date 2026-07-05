@@ -790,7 +790,7 @@ target_model = "claude-fable-5"
 }
 
 #[test]
-fn watch_fast_path_queues_compact_while_working_then_switches_on_idle() {
+fn watch_fast_path_interrupts_compacts_and_switches_in_one_pass() {
     let temp = tempfile::tempdir().expect("tempdir");
     let projects = temp.path().join("projects");
     let cwd = temp.path().join("repo");
@@ -814,7 +814,9 @@ target_model = "claude-fable-5"
     let herdr_log = temp.path().join("herdr.log");
 
     // Pass 1: the downgraded session's pane is WORKING. The fast path must
-    // queue the compact immediately instead of waiting for idle.
+    // run the entire chain synchronously — interrupt (Escape), compact,
+    // switch — in this single pass. It must never leave the switch for a
+    // later tick to deliver (a busy session is never observably idle).
     let (fake_herdr, fixture) = fake_herdr_with_sessions(
         temp.path(),
         &[(
@@ -850,49 +852,47 @@ target_model = "claude-fable-5"
         assert
     };
 
-    run("working pane").stdout(predicate::str::contains("queue-compact"));
+    run("working pane").stdout(predicate::str::contains(
+        "interrupt then compact then switch:claude-fable-5",
+    ));
     let log = fs::read_to_string(&herdr_log).expect("herdr log");
+    let escape_at = log
+        .find("pane send-keys w13:p1 escape")
+        .expect("escape must be sent to end the current turn");
+    let compact_at = log
+        .find("pane run w13:p1 /compact")
+        .expect("compact must be sent in the same pass");
+    let switch_at = log
+        .find("pane run w13:p1 /model claude-fable-5")
+        .expect("switch must be sent in the same pass, never left for a later tick");
     assert!(
-        log.contains("pane run w13:p1 /compact"),
-        "compact should be queued into the working pane, log: {log}"
+        escape_at < compact_at && compact_at < switch_at,
+        "chain must run escape -> compact -> switch in order, log: {log}"
     );
     assert!(
-        !log.contains("/model"),
-        "no switch while the compact is pending, log: {log}"
+        log.contains("wait agent-status w13:p1 --status idle"),
+        "the chain must wait for idle between steps, log: {log}"
     );
 
-    // Pass 2: still working (compact queued, turn not finished) — no re-queue.
-    run("still working").stdout(predicate::str::contains("compact-pending"));
+    // Pass 2: the switch just fired, so the session is debounced — a second
+    // pass must not type anything again even if drift still shows (the
+    // transcript lags the live pane).
+    run("debounced follow-up").stdout(predicate::str::contains("debounce"));
     let log = fs::read_to_string(&herdr_log).expect("herdr log");
     assert_eq!(
         log.matches("/compact").count(),
         1,
-        "compact must not be re-queued, log: {log}"
-    );
-
-    // Pass 3: pane idle (turn ended, queued compact ran) — bare switch, no
-    // second compact.
-    fake_herdr_with_sessions(
-        temp.path(),
-        &[(
-            "w13:p1",
-            &cwd,
-            "claude",
-            "idle",
-            false,
-            Some("adminifi-session"),
-        )],
-    );
-    run("idle after compact").stdout(predicate::str::contains("switch:claude-fable-5"));
-    let log = fs::read_to_string(&herdr_log).expect("herdr log");
-    assert!(
-        log.contains("pane run w13:p1 /model claude-fable-5"),
-        "switch should reach the bound pane, log: {log}"
+        "the follow-up pass must not compact again, log: {log}"
     );
     assert_eq!(
-        log.matches("/compact").count(),
+        log.matches("/model").count(),
         1,
-        "the idle pass must not compact again, log: {log}"
+        "the follow-up pass must not switch again, log: {log}"
+    );
+    assert_eq!(
+        log.matches("send-keys").count(),
+        1,
+        "the follow-up pass must not escape again, log: {log}"
     );
 }
 

@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 
 use crate::defaults::{
-    COMPACT_COMMAND, COMPACT_WAIT_TIMEOUT_MS, DEFAULT_TARGET_MODEL, PENDING_COMPACT_EXPIRY_SECONDS,
+    COMPACT_COMMAND, COMPACT_WAIT_TIMEOUT_MS, DEFAULT_TARGET_MODEL, INTERRUPT_WAIT_TIMEOUT_MS,
+    PENDING_COMPACT_EXPIRY_SECONDS,
 };
 use crate::herdr::{pane_session_id, run_herdr_args, HerdrPane};
 use crate::model::{
@@ -30,10 +31,24 @@ pub(crate) fn execute_remediation(pane_id: &str, actions: &[PlannedAction]) -> R
                 ])
                 .with_context(|| format!("wait for compact to finish in Herdr pane {pane_id}"))?;
             }
-            PlannedAction::QueueCompact => {
-                run_herdr_args(&["pane", "run", pane_id, COMPACT_COMMAND]).with_context(|| {
-                    format!("queue compact command into working Herdr pane {pane_id}")
-                })?;
+            PlannedAction::Interrupt => {
+                // Escape ends the current turn (interrupt, not kill). The
+                // short idle wait confirms the interrupt landed; if a queued
+                // message immediately starts a new turn after this returns,
+                // the follow-up /compact and /model still land in FIFO order
+                // as queued inputs and execute when that turn ends.
+                run_herdr_args(&["pane", "send-keys", pane_id, "escape"])
+                    .with_context(|| format!("send escape to Herdr pane {pane_id}"))?;
+                run_herdr_args(&[
+                    "wait",
+                    "agent-status",
+                    pane_id,
+                    "--status",
+                    "idle",
+                    "--timeout",
+                    &INTERRUPT_WAIT_TIMEOUT_MS.to_string(),
+                ])
+                .with_context(|| format!("wait for interrupt to land in Herdr pane {pane_id}"))?;
             }
             PlannedAction::SwitchModel(model) => {
                 let command = format!("/model {model}");
@@ -58,45 +73,44 @@ pub(crate) fn remediation_plan(
         .as_ref()
         .and_then(|target| detect_drift(session, &target.target_model));
 
-    // Fast path: a downgraded session should not wait for idle. The moment
-    // drift shows on a working pane we queue /compact into the composer (it
-    // executes when the current turn ends); once the pane is idle with the
-    // compact behind it, the bare /model switch goes through without the
-    // cache-rewind confirmation dialog. Both steps require the pane to be
-    // bound to this exact session id — never a cwd guess.
+    // Fast path: a downgraded session must not keep working on the wrong
+    // model, and remediation must not depend on ever SAMPLING the pane idle
+    // — a busy lead session with queued teammate messages is never
+    // observably idle, which is exactly how the 2026-07-04 switch was lost
+    // (compact fired, every subsequent tick sampled `working`, /model never
+    // went out). Instead the whole chain runs synchronously in one pass:
+    // Escape ends the current turn, /compact runs on the confirmed-idle
+    // pane, and /model goes out right behind it — if a queued message
+    // steals the pane first, both inputs queue FIFO and execute in order,
+    // /model landing dialog-free on the small post-compact context. All of
+    // it requires the pane to be bound to this exact session id — never a
+    // cwd guess.
     if let (Some(target), Some(_)) = (&target, &drift) {
         if let [pane] = matching_panes {
-            if pane_session_id(pane) == Some(session.session_id.as_str()) {
-                let pending = has_pending_compact(state, now);
-                match pane.agent_status.as_deref() {
-                    Some("working") if pending => {
-                        return RemediationPlan {
-                            gate: GateDecision {
-                                blockers: vec![GateBlocker::CompactPending],
-                            },
-                            actions: Vec::new(),
-                        };
-                    }
-                    Some("working") if !is_debounced(state, config, now) => {
-                        return RemediationPlan {
-                            gate: GateDecision {
-                                blockers: Vec::new(),
-                            },
-                            actions: vec![PlannedAction::QueueCompact],
-                        };
-                    }
-                    Some("idle") if pending => {
-                        // The queued compact already ran; finish with the
-                        // switch regardless of transcript freshness — the
-                        // recent transcript activity is our own compact.
-                        return RemediationPlan {
-                            gate: GateDecision {
-                                blockers: Vec::new(),
-                            },
-                            actions: vec![PlannedAction::SwitchModel(target.target_model.clone())],
-                        };
-                    }
-                    _ => {}
+            if pane_session_id(pane) == Some(session.session_id.as_str())
+                && pane.agent_status.as_deref() == Some("working")
+            {
+                if has_pending_compact(state, now) {
+                    // A chain is (or may be) already in flight — persisted
+                    // before it started typing. Never double-Escape.
+                    return RemediationPlan {
+                        gate: GateDecision {
+                            blockers: vec![GateBlocker::CompactPending],
+                        },
+                        actions: Vec::new(),
+                    };
+                }
+                if !is_debounced(state, config, now) {
+                    return RemediationPlan {
+                        gate: GateDecision {
+                            blockers: Vec::new(),
+                        },
+                        actions: vec![
+                            PlannedAction::Interrupt,
+                            PlannedAction::Compact,
+                            PlannedAction::SwitchModel(target.target_model.clone()),
+                        ],
+                    };
                 }
             }
         }
@@ -294,7 +308,7 @@ pub(crate) fn describe_actions(actions: &[PlannedAction]) -> String {
         .iter()
         .map(|action| match action {
             PlannedAction::Compact => "compact".to_string(),
-            PlannedAction::QueueCompact => "queue-compact".to_string(),
+            PlannedAction::Interrupt => "interrupt".to_string(),
             PlannedAction::SwitchModel(model) => format!("switch:{model}"),
         })
         .collect::<Vec<_>>()

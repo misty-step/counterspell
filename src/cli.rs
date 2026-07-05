@@ -579,8 +579,15 @@ fn watch(cli: &Cli, args: &WatchArgs) -> Result<()> {
     }
 
     let panes = load_herdr_panes().context("load Herdr panes for watch")?;
-    let (rows, store_changed, feed_events) =
-        watch_rows(&sessions, &panes, &mut store, &config, now, args.arm)?;
+    let (rows, store_changed, feed_events) = watch_rows(
+        &sessions,
+        &panes,
+        &mut store,
+        &config,
+        now,
+        args.arm,
+        Some(&state_path),
+    )?;
     if store_changed {
         save_store(&state_path, &store)?;
     }

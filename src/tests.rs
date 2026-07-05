@@ -200,7 +200,7 @@ fn fast_path_state(now: DateTime<Utc>, pending_secs_ago: i64) -> SessionState {
 }
 
 #[test]
-fn drift_on_working_session_bound_pane_queues_compact_immediately() {
+fn drift_on_working_session_bound_pane_interrupts_and_remediates_in_one_pass() {
     let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
         .unwrap()
         .with_timezone(&Utc);
@@ -216,7 +216,17 @@ fn drift_on_working_session_bound_pane_queues_compact_immediately() {
     let plan = remediation_plan(&session, &panes, None, &config, now);
 
     assert!(plan.gate.is_allowed());
-    assert_eq!(plan.actions, vec![PlannedAction::QueueCompact]);
+    // The whole chain runs synchronously in one pass: the switch must never
+    // depend on a later tick happening to sample the pane idle (that lost
+    // the 2026-07-04 switch on a busy session).
+    assert_eq!(
+        plan.actions,
+        vec![
+            PlannedAction::Interrupt,
+            PlannedAction::Compact,
+            PlannedAction::SwitchModel("claude-fable-5".to_string())
+        ]
+    );
 }
 
 #[test]
@@ -239,14 +249,40 @@ fn working_pane_with_pending_compact_blocks_requeue() {
 }
 
 #[test]
-fn idle_pane_with_pending_compact_switches_without_recompacting() {
+fn idle_pane_with_pending_compact_never_bare_switches() {
+    // A pending marker does NOT prove the compact ran (the chain may have
+    // crashed before typing it). A bare /model on a large context pops the
+    // cache-rewind dialog and wedges the pane — so an idle pane with a
+    // pending marker must fall through to the ordinary gate, not shortcut
+    // to a lone switch.
     let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
         .unwrap()
         .with_timezone(&Utc);
     let config = test_config();
-    // Transcript active from our own compact — must not block the switch.
     let mut session = test_session(now);
     session.last_event_at = now - Duration::seconds(3);
+    let mut pane = idle_pane();
+    pane.agent_session = bound_session("session-1");
+    let panes = [&pane];
+    let state = fast_path_state(now, 90);
+
+    let plan = remediation_plan(&session, &panes, Some(&state), &config, now);
+
+    assert_eq!(plan.gate.blockers, vec![GateBlocker::TranscriptActive]);
+    assert!(plan.actions.is_empty());
+}
+
+#[test]
+fn idle_pane_with_pending_compact_recovers_via_full_compact_then_switch() {
+    // Crash recovery: once the transcript is quiet, the ordinary idle path
+    // re-runs the full compact-then-switch pair. Re-compacting an already
+    // compacted (tiny) context is cheap; bare-switching an uncompacted one
+    // is not safe. The marker never shortcuts the sequence.
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let config = test_config();
+    let session = test_session(now);
     let mut pane = idle_pane();
     pane.agent_session = bound_session("session-1");
     let panes = [&pane];
@@ -257,7 +293,10 @@ fn idle_pane_with_pending_compact_switches_without_recompacting() {
     assert!(plan.gate.is_allowed());
     assert_eq!(
         plan.actions,
-        vec![PlannedAction::SwitchModel("claude-fable-5".to_string())]
+        vec![
+            PlannedAction::Compact,
+            PlannedAction::SwitchModel("claude-fable-5".to_string())
+        ]
     );
 }
 

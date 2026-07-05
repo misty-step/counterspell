@@ -58,9 +58,12 @@ pub(crate) struct SessionState {
     pub(crate) session_id: String,
     pub(crate) cwd: Option<String>,
     pub(crate) last_action_unix: Option<u64>,
-    /// Set when a `/compact` was queued into a still-working pane (fast
-    /// path). The follow-up pass sends the bare model switch once the pane
-    /// is idle, then clears this.
+    /// In-flight/crash marker. Persisted to disk BEFORE an interrupt-driven
+    /// remediation chain starts typing, cleared when the chain completes (or
+    /// when drift is gone). While set and unexpired, no second chain may
+    /// fire at the same session — that is the double-Escape guard. If the
+    /// daemon dies mid-chain the marker expires and the ordinary idle path
+    /// (compact-then-switch, which is safe to repeat) recovers the session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) pending_compact_unix: Option<u64>,
 }
@@ -126,10 +129,11 @@ pub(crate) struct ModelDrift {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PlannedAction {
     Compact,
-    /// Fast path: type the compact command into a still-working pane. It
-    /// queues in the composer and executes the moment the current turn
-    /// ends. No wait, no follow-up switch in the same pass.
-    QueueCompact,
+    /// Fast path opener: press Escape in a working pane to end the current
+    /// turn immediately (interrupt, not kill), then wait briefly for idle.
+    /// A downgraded session must not keep burning the wrong model for the
+    /// rest of a long turn — 2026-07-04 postmortem.
+    Interrupt,
     SwitchModel(String),
 }
 
@@ -140,7 +144,9 @@ pub(crate) enum GateBlocker {
     TranscriptActive,
     PaneBusy(String),
     Debounce,
-    /// A fast-path compact is queued in the pane and has not completed yet.
+    /// An interrupt-driven remediation chain is (or may be) in flight for
+    /// this session — persisted before the chain starts typing. Blocks a
+    /// second chain from double-firing until it completes or expires.
     CompactPending,
 }
 

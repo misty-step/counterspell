@@ -111,6 +111,10 @@ pub(crate) fn watch_rows(
     config: &Config,
     now: DateTime<Utc>,
     arm: bool,
+    // Where to durably persist the in-flight marker before a remediation
+    // chain starts typing. None in tests/dry contexts skips the mid-pass
+    // save (the caller's ordinary end-of-pass save still applies).
+    state_path: Option<&std::path::Path>,
 ) -> Result<(Vec<WatchRow>, bool, Vec<FeedEvent>)> {
     let mut store_changed = false;
     let mut rows = Vec::new();
@@ -167,17 +171,52 @@ pub(crate) fn watch_rows(
             });
         }
 
+        if drift.is_none() && prior_pending_compact_unix.is_some() {
+            // Stale in-flight marker with no drift left (chain finished via
+            // an operator's manual /model, or drift resolved out of band).
+            // Clear it so it can never gate a future remediation.
+            store.sessions.insert(
+                session.session_id.clone(),
+                SessionState {
+                    session_id: session.session_id.clone(),
+                    cwd: session.cwd.clone(),
+                    last_action_unix: prior_last_action_unix,
+                    pending_compact_unix: None,
+                },
+            );
+            store_changed = true;
+        }
+
         if arm && !plan.actions.is_empty() {
             // The gate only allows a plan when exactly one pane matched.
             let pane = matching_panes
                 .first()
                 .copied()
                 .context("eligible remediation plan had no Herdr pane")?;
-            execute_remediation(pane_id(pane), &plan.actions)?;
             let now_unix: u64 = now.timestamp().try_into().unwrap_or(0);
-            let queued_compact = plan
+            let sends_compact = plan
                 .actions
-                .contains(&crate::model::PlannedAction::QueueCompact);
+                .iter()
+                .any(|action| matches!(action, crate::model::PlannedAction::Compact));
+            if sends_compact {
+                // Persist the in-flight marker to disk BEFORE typing
+                // anything, so a concurrently launched watch (or a restart
+                // after a crash mid-chain) blocks on CompactPending instead
+                // of double-Escaping the same pane.
+                store.sessions.insert(
+                    session.session_id.clone(),
+                    SessionState {
+                        session_id: session.session_id.clone(),
+                        cwd: session.cwd.clone(),
+                        last_action_unix: prior_last_action_unix,
+                        pending_compact_unix: Some(now_unix),
+                    },
+                );
+                if let Some(state_path) = state_path {
+                    crate::store::save_store(state_path, store)?;
+                }
+            }
+            execute_remediation(pane_id(pane), &plan.actions)?;
             let switched = plan
                 .actions
                 .iter()
@@ -187,22 +226,14 @@ pub(crate) fn watch_rows(
                 SessionState {
                     session_id: session.session_id.clone(),
                     cwd: session.cwd.clone(),
-                    // The debounce clock starts at the model switch — a
-                    // queued fast-path compact is tracked by
-                    // pending_compact_unix instead so the follow-up switch
-                    // is not debounced away.
+                    // The debounce clock starts at the model switch.
                     last_action_unix: if switched {
                         Some(now_unix)
                     } else {
                         prior_last_action_unix
                     },
-                    pending_compact_unix: if switched {
-                        None
-                    } else if queued_compact {
-                        Some(now_unix)
-                    } else {
-                        prior_pending_compact_unix
-                    },
+                    // The chain completed; the in-flight marker comes off.
+                    pending_compact_unix: None,
                 },
             );
             store_changed = true;
@@ -216,18 +247,14 @@ pub(crate) fn watch_rows(
                         gate: gate.clone(),
                         action: match action {
                             crate::model::PlannedAction::Compact => "compact_sent".to_string(),
-                            crate::model::PlannedAction::QueueCompact => {
-                                "compact_queued".to_string()
-                            }
+                            crate::model::PlannedAction::Interrupt => "interrupt_sent".to_string(),
                             crate::model::PlannedAction::SwitchModel(_) => {
                                 "model_switched".to_string()
                             }
                         },
                         action_taken: match action {
                             crate::model::PlannedAction::Compact => "compact_sent".to_string(),
-                            crate::model::PlannedAction::QueueCompact => {
-                                "compact_queued".to_string()
-                            }
+                            crate::model::PlannedAction::Interrupt => "interrupt_sent".to_string(),
                             crate::model::PlannedAction::SwitchModel(model) => {
                                 format!("model_switched:{model}")
                             }
