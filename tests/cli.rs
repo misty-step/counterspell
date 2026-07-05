@@ -6,7 +6,10 @@ use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+static DASHBOARD_HTTP_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn version_flag_reports_package_version() {
@@ -1535,6 +1538,9 @@ target_model = "claude-fable-5"
 
 #[test]
 fn dashboard_rejects_target_enable_without_origin_or_referer() {
+    let _guard = DASHBOARD_HTTP_TEST_LOCK
+        .lock()
+        .expect("dashboard HTTP test lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let config = write_config(temp.path(), "");
 
@@ -1563,6 +1569,9 @@ fn dashboard_rejects_target_enable_without_origin_or_referer() {
 
 #[test]
 fn dashboard_rejects_target_enable_with_mismatched_origin() {
+    let _guard = DASHBOARD_HTTP_TEST_LOCK
+        .lock()
+        .expect("dashboard HTTP test lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let config = write_config(temp.path(), "");
 
@@ -1591,6 +1600,9 @@ fn dashboard_rejects_target_enable_with_mismatched_origin() {
 
 #[test]
 fn dashboard_accepts_target_enable_with_matching_origin() {
+    let _guard = DASHBOARD_HTTP_TEST_LOCK
+        .lock()
+        .expect("dashboard HTTP test lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let config = write_config(temp.path(), "");
 
@@ -1620,6 +1632,9 @@ fn dashboard_accepts_target_enable_with_matching_origin() {
 
 #[test]
 fn dashboard_rejects_target_disable_without_origin_or_referer() {
+    let _guard = DASHBOARD_HTTP_TEST_LOCK
+        .lock()
+        .expect("dashboard HTTP test lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let config = write_config(
         temp.path(),
