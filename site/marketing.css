@@ -68,12 +68,6 @@
   display: grid;
   gap: var(--ae-space-5);
   max-width: 52%;
-  background: var(--ae-wash);
-  background: color-mix(in srgb, var(--ae-surface) 62%, transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(6px);
-  border: 1px solid var(--ae-line);
-  padding: var(--ae-space-6);
 }
 
 .msk-hero-title {
