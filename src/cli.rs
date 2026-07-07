@@ -6,7 +6,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
-use std::time::UNIX_EPOCH;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::{
     add_target_to_config, config_path, default_config_text, describe_target_rule,
@@ -17,8 +17,8 @@ use crate::dashboard;
 use crate::defaults::DEFAULT_TARGET_MODEL;
 use crate::feed::append_feed_events;
 use crate::herdr::{
-    annotate_herdr_pane, load_herdr_panes, matching_panes_for_session, pane_id, run_herdr_args,
-    session_reporting_broken,
+    annotate_herdr_pane, load_herdr_panes, matching_panes_for_session, pane_id, pane_session_id,
+    run_herdr_args, session_reporting_broken,
 };
 use crate::indicators::{
     launch_agent_path, launch_agent_scheduled, load_launch_agent, swiftbar_plugin_path,
@@ -27,6 +27,9 @@ use crate::indicators::{
 };
 use crate::model::FileConfig;
 use crate::output::{print_status, print_status_json, print_watch};
+use crate::rebind::{
+    build_report_request, resolve_pane_env, resolve_target_session, send_report_request,
+};
 use crate::remediation::detect_actionable_drift;
 use crate::sessions::discover_recent_sessions;
 use crate::status::{status_rows, watch_rows};
@@ -77,6 +80,9 @@ enum Commands {
     Watch(WatchArgs),
     /// Show recent Claude sessions and their matching Herdr panes.
     Status(StatusArgs),
+    /// Re-assert this pane's Herdr agent-session binding without waiting for
+    /// a Claude SessionStart event (restart/resume/clear).
+    Rebind(RebindArgs),
 }
 
 #[derive(Debug, Args)]
@@ -226,6 +232,25 @@ struct StatusArgs {
     json: bool,
 }
 
+#[derive(Debug, Args)]
+struct RebindArgs {
+    /// Report this session id instead of discovering it from the live
+    /// transcript for the current working directory.
+    #[arg(long, value_name = "SESSION_ID")]
+    session_id: Option<String>,
+
+    /// Report this transcript path instead of discovering it. When
+    /// `--session-id` is absent, the session id is derived from its file
+    /// stem, matching Herdr's own `kind == "path"` convention.
+    #[arg(long, value_name = "PATH")]
+    transcript_path: Option<PathBuf>,
+
+    /// Re-query `herdr pane list` after rebinding and confirm the pane now
+    /// reports this session.
+    #[arg(long)]
+    verify: bool,
+}
+
 pub fn run_from_args() -> Result<()> {
     let cli = Cli::parse();
     run(cli)
@@ -245,6 +270,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Some(Commands::Ui(args)) => dashboard::serve_dashboard(&cli, args),
         Some(Commands::Watch(args)) => watch(&cli, args),
         Some(Commands::Status(args)) => status(&cli, args),
+        Some(Commands::Rebind(args)) => rebind(&cli, args),
         None => bail!("missing command; run `counterspell --help`"),
     }
 }
@@ -617,6 +643,27 @@ fn watch(cli: &Cli, args: &WatchArgs) -> Result<()> {
                  need a fresh SessionStart (e.g. a Claude Code restart) to pick up the hook."
             );
         }
+    } else {
+        // Only one (or a few) panes stranded while the rest report fine —
+        // the common case, and the one `session_reporting_broken` cannot see
+        // since it only fires when EVERY claude pane lost reporting. Never
+        // auto-inject into a pane we cannot identify by session id (that is
+        // exactly the ambiguity `matching_panes_for_session` guards against);
+        // just point the operator at the fix.
+        for pane in &panes {
+            if pane.agent.as_deref() == Some("claude") && pane_session_id(pane).is_none() {
+                eprintln!(
+                    "hint: pane {} (cwd {}) is not reporting an agent_session; run \
+                     `counterspell rebind` inside it to restore binding now, or restart/resume/\
+                     clear that Claude session to pick it up automatically.",
+                    pane_id(pane),
+                    pane.cwd
+                        .as_deref()
+                        .or(pane.foreground_cwd.as_deref())
+                        .unwrap_or("-")
+                );
+            }
+        }
     }
     let (rows, store_changed, feed_events) = watch_rows(
         &sessions,
@@ -649,6 +696,64 @@ fn status(cli: &Cli, args: &StatusArgs) -> Result<()> {
     } else {
         print_status(&rows);
     }
+    Ok(())
+}
+
+fn rebind(cli: &Cli, args: &RebindArgs) -> Result<()> {
+    let config = load_config(cli)?;
+    let now = Utc::now();
+    let pane_env = resolve_pane_env()?;
+    let cwd = env::current_dir().context("resolve current working directory")?;
+    let (session_id, transcript_path) = resolve_target_session(
+        &config,
+        args.session_id.as_deref(),
+        args.transcript_path.as_deref(),
+        &cwd,
+        now,
+    )?;
+
+    println!("pane_id: {}", pane_env.pane_id);
+    println!("session_id: {session_id}");
+    if let Some(path) = &transcript_path {
+        println!("transcript_path: {path}");
+    }
+
+    let seq = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("read system clock")?
+        .as_nanos() as u64;
+    let request = build_report_request(
+        &pane_env.pane_id,
+        &session_id,
+        transcript_path.as_deref(),
+        seq,
+    );
+    let response = send_report_request(&pane_env.socket_path, &request)
+        .context("send pane.report_agent_session to Herdr")?;
+    match &response {
+        Some(value) => println!("herdr response: {value}"),
+        None => println!("herdr response: <no response received>"),
+    }
+
+    if args.verify {
+        let panes = load_herdr_panes().context("load Herdr panes to verify rebind")?;
+        let pane = panes
+            .iter()
+            .find(|pane| pane.pane_id == pane_env.pane_id)
+            .with_context(|| format!("pane {} not found in `herdr pane list`", pane_env.pane_id))?;
+        if pane_session_id(pane) == Some(session_id.as_str()) {
+            println!(
+                "verify: pane {} now reports session {session_id}",
+                pane_env.pane_id
+            );
+        } else {
+            bail!(
+                "verify: pane {} does not report session {session_id} yet",
+                pane_env.pane_id
+            );
+        }
+    }
+
     Ok(())
 }
 

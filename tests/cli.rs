@@ -1,9 +1,12 @@
 use assert_cmd::prelude::*;
 use predicates::prelude::*;
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 #[test]
@@ -1652,6 +1655,253 @@ fn herdr_call_times_out_instead_of_hanging_forever() {
         started.elapsed() < Duration::from_secs(5),
         "a hung herdr must not block the caller past its configured deadline"
     );
+}
+
+#[test]
+fn rebind_fails_clearly_outside_a_herdr_managed_pane() {
+    let temp = tempfile::tempdir().expect("tempdir");
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("rebind")
+        .env("HOME", temp.path())
+        .env_remove("HERDR_ENV")
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HERDR_SOCKET_PATH")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("HERDR_ENV"))
+        .stderr(predicate::str::contains("herdr-managed pane"));
+}
+
+#[test]
+fn rebind_fails_clearly_when_pane_id_is_missing() {
+    let temp = tempfile::tempdir().expect("tempdir");
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("rebind")
+        .env("HOME", temp.path())
+        .env("HERDR_ENV", "1")
+        .env_remove("HERDR_PANE_ID")
+        .env("HERDR_SOCKET_PATH", temp.path().join("herdr.sock"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("HERDR_PANE_ID"));
+}
+
+#[test]
+fn rebind_sends_report_agent_session_matching_herdr_hook_shape() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let socket_path = temp.path().join("herdr.sock");
+    let handle = spawn_fake_herdr_socket(&socket_path, r#"{"id":"x","result":{"ok":true}}"#);
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("rebind")
+        .arg("--session-id")
+        .arg("session-xyz")
+        .arg("--transcript-path")
+        .arg("/repo/session-xyz.jsonl")
+        .env("HOME", temp.path())
+        .env("HERDR_ENV", "1")
+        .env("HERDR_PANE_ID", "w1:p1")
+        .env("HERDR_SOCKET_PATH", &socket_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pane_id: w1:p1"))
+        .stdout(predicate::str::contains("session_id: session-xyz"))
+        .stdout(predicate::str::contains(
+            "transcript_path: /repo/session-xyz.jsonl",
+        ))
+        .stdout(predicate::str::contains(r#""ok":true"#));
+
+    let received = handle.join().expect("join fake herdr socket thread");
+    let request: serde_json::Value =
+        serde_json::from_str(received.trim()).expect("parse request as JSON");
+    assert_eq!(request["method"], "pane.report_agent_session");
+    assert_eq!(request["params"]["pane_id"], "w1:p1");
+    assert_eq!(request["params"]["source"], "herdr:claude");
+    assert_eq!(request["params"]["agent"], "claude");
+    assert_eq!(request["params"]["agent_session_id"], "session-xyz");
+    assert_eq!(
+        request["params"]["agent_session_path"],
+        "/repo/session-xyz.jsonl"
+    );
+    assert!(
+        request["params"]["seq"].is_u64(),
+        "seq must be a monotonic integer, got {:?}",
+        request["params"]["seq"]
+    );
+    assert!(!request["id"].as_str().expect("id is a string").is_empty());
+}
+
+#[test]
+fn rebind_discovers_session_from_live_transcript_for_cwd_without_overrides() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let cwd = temp.path().join("adminifi");
+    fs::create_dir_all(&cwd).expect("cwd");
+    write_transcript(
+        &projects,
+        "-Users-phaedrus-Development-adminifi",
+        "adminifi-session",
+        &cwd,
+        "claude-fable-5",
+    );
+    let socket_path = temp.path().join("herdr.sock");
+    let handle = spawn_fake_herdr_socket(&socket_path, r#"{"result":{"ok":true}}"#);
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--recent-hours")
+        .arg("999")
+        .arg("rebind")
+        .current_dir(&cwd)
+        .env("HOME", temp.path())
+        .env("HERDR_ENV", "1")
+        .env("HERDR_PANE_ID", "w1:p1")
+        .env("HERDR_SOCKET_PATH", &socket_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("session_id: adminifi-session"));
+
+    let received = handle.join().expect("join fake herdr socket thread");
+    let request: serde_json::Value =
+        serde_json::from_str(received.trim()).expect("parse request as JSON");
+    assert_eq!(request["params"]["agent_session_id"], "adminifi-session");
+    assert!(
+        request["params"]["agent_session_path"]
+            .as_str()
+            .expect("path is a string")
+            .ends_with("adminifi-session.jsonl"),
+        "discovered transcript path should point at the matched session file, got {:?}",
+        request["params"]["agent_session_path"]
+    );
+}
+
+#[test]
+fn rebind_errors_clearly_when_no_transcript_matches_cwd_and_no_override_given() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    fs::create_dir_all(&projects).expect("projects");
+    let cwd = temp.path().join("empty-repo");
+    fs::create_dir_all(&cwd).expect("cwd");
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("rebind")
+        .current_dir(&cwd)
+        .env("HOME", temp.path())
+        .env("HERDR_ENV", "1")
+        .env("HERDR_PANE_ID", "w1:p1")
+        .env("HERDR_SOCKET_PATH", temp.path().join("herdr.sock"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--session-id"))
+        .stderr(predicate::str::contains("--transcript-path"));
+}
+
+#[test]
+fn rebind_verify_confirms_pane_now_reports_the_session() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let socket_path = temp.path().join("herdr.sock");
+    let handle = spawn_fake_herdr_socket(&socket_path, r#"{"result":{"ok":true}}"#);
+    let (fake_herdr, fixture) = fake_herdr_with_sessions(
+        temp.path(),
+        &[(
+            "w1:p1",
+            Path::new("/nonexistent"),
+            "claude",
+            "idle",
+            false,
+            Some("session-xyz"),
+        )],
+    );
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("rebind")
+        .arg("--session-id")
+        .arg("session-xyz")
+        .arg("--verify")
+        .env("HOME", temp.path())
+        .env("HERDR_ENV", "1")
+        .env("HERDR_PANE_ID", "w1:p1")
+        .env("HERDR_SOCKET_PATH", &socket_path)
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "verify: pane w1:p1 now reports session session-xyz",
+        ));
+
+    handle.join().expect("join fake herdr socket thread");
+}
+
+#[test]
+fn rebind_verify_fails_when_pane_still_reports_a_different_session() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let socket_path = temp.path().join("herdr.sock");
+    let handle = spawn_fake_herdr_socket(&socket_path, r#"{"result":{"ok":true}}"#);
+    let (fake_herdr, fixture) = fake_herdr_with_sessions(
+        temp.path(),
+        &[(
+            "w1:p1",
+            Path::new("/nonexistent"),
+            "claude",
+            "idle",
+            false,
+            Some("stale-session"),
+        )],
+    );
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("rebind")
+        .arg("--session-id")
+        .arg("session-xyz")
+        .arg("--verify")
+        .env("HOME", temp.path())
+        .env("HERDR_ENV", "1")
+        .env("HERDR_PANE_ID", "w1:p1")
+        .env("HERDR_SOCKET_PATH", &socket_path)
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "does not report session session-xyz yet",
+        ));
+
+    handle.join().expect("join fake herdr socket thread");
+}
+
+/// A minimal fixture standing in for herdr's unix socket: accepts exactly one
+/// connection, reads one newline-delimited JSON request line, writes back the
+/// given response line, and returns the raw request line to the caller for
+/// assertions. Mirrors the protocol `~/.claude/hooks/herdr-agent-state.sh`
+/// speaks (and `rebind` reuses): connect, write request + "\n", best-effort
+/// read one response line.
+fn spawn_fake_herdr_socket(socket_path: &Path, response_line: &str) -> JoinHandle<String> {
+    let listener = UnixListener::bind(socket_path).expect("bind fake herdr socket");
+    let response_line = response_line.to_string();
+    thread::spawn(move || {
+        let (stream, _addr) = listener.accept().expect("accept fake herdr connection");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone fake herdr stream"));
+        let mut request_line = String::new();
+        reader
+            .read_line(&mut request_line)
+            .expect("read request line from fake herdr client");
+        let mut writer = stream;
+        writeln!(writer, "{response_line}").expect("write fake herdr response");
+        request_line
+    })
 }
 
 fn write_transcript(projects: &Path, project: &str, session_id: &str, cwd: &Path, model: &str) {

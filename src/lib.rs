@@ -8,6 +8,7 @@ mod herdr;
 mod indicators;
 mod model;
 mod output;
+mod rebind;
 mod remediation;
 mod sessions;
 mod status;
@@ -27,6 +28,8 @@ pub(crate) use model::{
     Config, FileConfig, GateBlocker, ModelDrift, PlannedAction, SessionState, TargetRule,
     TranscriptSession, WatchStore,
 };
+#[cfg(test)]
+pub(crate) use rebind::{build_report_request, resolve_target_session};
 #[cfg(test)]
 pub(crate) use remediation::{
     describe_gate, detect_drift, format_target_match, gate_decision_for_matches, remediation_plan,

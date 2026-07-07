@@ -897,3 +897,121 @@ fn done_pane_is_remediable_like_idle() {
         ]
     );
 }
+
+#[test]
+fn build_report_request_matches_herdr_report_agent_session_shape() {
+    let request = build_report_request(
+        "w1:p1",
+        "session-xyz",
+        Some("/path/to/session-xyz.jsonl"),
+        12345,
+    );
+
+    assert_eq!(request["method"], "pane.report_agent_session");
+    assert_eq!(request["params"]["pane_id"], "w1:p1");
+    assert_eq!(request["params"]["source"], "herdr:claude");
+    assert_eq!(request["params"]["agent"], "claude");
+    assert_eq!(request["params"]["seq"], 12345);
+    assert_eq!(request["params"]["agent_session_id"], "session-xyz");
+    assert_eq!(
+        request["params"]["agent_session_path"],
+        "/path/to/session-xyz.jsonl"
+    );
+    assert!(request["id"]
+        .as_str()
+        .expect("id is a string")
+        .starts_with("herdr:claude:"));
+}
+
+#[test]
+fn build_report_request_omits_path_field_when_absent() {
+    let request = build_report_request("w1:p1", "session-xyz", None, 1);
+    assert!(request["params"].get("agent_session_path").is_none());
+}
+
+#[test]
+fn resolve_target_session_prefers_explicit_session_id_override() {
+    let config = test_config();
+    let (session_id, transcript_path) = resolve_target_session(
+        &config,
+        Some("explicit-session"),
+        None,
+        std::path::Path::new("/whatever"),
+        Utc::now(),
+    )
+    .expect("resolve");
+
+    assert_eq!(session_id, "explicit-session");
+    assert_eq!(transcript_path, None);
+}
+
+#[test]
+fn resolve_target_session_derives_session_id_from_explicit_transcript_path() {
+    let config = test_config();
+    let path = PathBuf::from("/some/where/abc-123.jsonl");
+    let (session_id, transcript_path) = resolve_target_session(
+        &config,
+        None,
+        Some(path.as_path()),
+        std::path::Path::new("/whatever"),
+        Utc::now(),
+    )
+    .expect("resolve");
+
+    assert_eq!(session_id, "abc-123");
+    assert_eq!(
+        transcript_path.as_deref(),
+        Some("/some/where/abc-123.jsonl")
+    );
+}
+
+#[test]
+fn resolve_target_session_discovers_newest_transcript_for_matching_cwd() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let cwd = temp.path().join("repo");
+    let project_dir = projects.join("-Users-phaedrus-Development-repo");
+    std::fs::create_dir_all(&project_dir).expect("project dir");
+    let transcript_path = project_dir.join("session-abc.jsonl");
+    let mut file = File::create(&transcript_path).expect("create transcript");
+    writeln!(
+        file,
+        r#"{{"type":"assistant","sessionId":"session-abc","timestamp":"2026-07-02T12:00:00Z","cwd":"{}","message":{{"model":"claude-fable-5"}}}}"#,
+        cwd.display()
+    )
+    .expect("write transcript");
+
+    let config = Config {
+        projects_dir: projects,
+        recent_hours: 999,
+        targets: Vec::new(),
+        transcript_quiet_seconds: 30,
+        debounce_seconds: 300,
+    };
+
+    let (session_id, resolved_transcript_path) =
+        resolve_target_session(&config, None, None, &cwd, Utc::now()).expect("resolve");
+
+    assert_eq!(session_id, "session-abc");
+    assert_eq!(
+        resolved_transcript_path,
+        Some(transcript_path.to_string_lossy().into_owned())
+    );
+}
+
+#[test]
+fn resolve_target_session_errors_clearly_when_no_transcript_matches_cwd() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config = Config {
+        projects_dir: temp.path().join("projects"),
+        recent_hours: 999,
+        targets: Vec::new(),
+        transcript_quiet_seconds: 30,
+        debounce_seconds: 300,
+    };
+
+    let error = resolve_target_session(&config, None, None, temp.path(), Utc::now())
+        .expect_err("no transcript should match an empty projects dir");
+
+    assert!(format!("{error:#}").contains("--session-id"));
+}
