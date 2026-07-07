@@ -1807,6 +1807,58 @@ fn rebind_errors_clearly_when_no_transcript_matches_cwd_and_no_override_given() 
 }
 
 #[test]
+fn rebind_refuses_ambiguous_cwd_with_two_live_sessions_and_sends_nothing() {
+    // Live regression (2026-07-07, commit 7f32423 smoke test): two concurrent
+    // Claude sessions shared a cwd and cwd-based discovery silently picked
+    // the wrong one, then sent a real report for it. This must now refuse
+    // before ever touching the socket — no listener is bound at
+    // `socket_path` here at all, so any attempt to connect would fail loudly
+    // with a distinct "connect Herdr socket" error instead of the ambiguity
+    // message asserted below.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let cwd = temp.path().join("repo");
+    fs::create_dir_all(&cwd).expect("cwd");
+    write_transcript(
+        &projects,
+        "-Users-phaedrus-Development-repo",
+        "session-alpha",
+        &cwd,
+        "claude-fable-5",
+    );
+    write_transcript(
+        &projects,
+        "-Users-phaedrus-Development-repo",
+        "session-beta",
+        &cwd,
+        "claude-fable-5",
+    );
+    let socket_path = temp.path().join("herdr.sock");
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--recent-hours")
+        .arg("999")
+        .arg("rebind")
+        .current_dir(&cwd)
+        .env("HOME", temp.path())
+        .env("HERDR_ENV", "1")
+        .env("HERDR_PANE_ID", "w1:p1")
+        .env("HERDR_SOCKET_PATH", &socket_path)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session-alpha"))
+        .stderr(predicate::str::contains("session-beta"))
+        .stderr(predicate::str::contains("refusing to guess"))
+        .stderr(predicate::str::contains("--session-id"))
+        .stderr(predicate::str::contains("connect Herdr socket").not())
+        .stdout(predicate::str::contains("pane_id").not())
+        .stdout(predicate::str::contains("herdr response").not());
+}
+
+#[test]
 fn rebind_verify_confirms_pane_now_reports_the_session() {
     let temp = tempfile::tempdir().expect("tempdir");
     let socket_path = temp.path().join("herdr.sock");

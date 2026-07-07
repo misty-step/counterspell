@@ -1015,3 +1015,51 @@ fn resolve_target_session_errors_clearly_when_no_transcript_matches_cwd() {
 
     assert!(format!("{error:#}").contains("--session-id"));
 }
+
+#[test]
+fn resolve_target_session_refuses_to_guess_when_two_sessions_share_a_cwd() {
+    // Live regression (2026-07-07, commit 7f32423 smoke test): discovery
+    // picked the newest of two concurrent sessions sharing a cwd and sent a
+    // real report for the WRONG one. Ambiguity must hard-block here exactly
+    // like `matching_panes_for_session` hard-blocks ambiguous cwd pane ties
+    // — never silently pick "newest".
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let cwd = temp.path().join("repo");
+    let project_dir = projects.join("-Users-phaedrus-Development-repo");
+    std::fs::create_dir_all(&project_dir).expect("project dir");
+
+    let mut older = File::create(project_dir.join("session-older.jsonl")).expect("create older");
+    writeln!(
+        older,
+        r#"{{"type":"assistant","sessionId":"session-older","timestamp":"2026-07-02T12:00:00Z","cwd":"{}","message":{{"model":"claude-fable-5"}}}}"#,
+        cwd.display()
+    )
+    .expect("write older transcript");
+
+    let mut newer = File::create(project_dir.join("session-newer.jsonl")).expect("create newer");
+    writeln!(
+        newer,
+        r#"{{"type":"assistant","sessionId":"session-newer","timestamp":"2026-07-05T12:00:00Z","cwd":"{}","message":{{"model":"claude-fable-5"}}}}"#,
+        cwd.display()
+    )
+    .expect("write newer transcript");
+
+    let config = Config {
+        projects_dir: projects,
+        recent_hours: 999,
+        targets: Vec::new(),
+        transcript_quiet_seconds: 30,
+        debounce_seconds: 300,
+    };
+
+    let error = resolve_target_session(&config, None, None, &cwd, Utc::now())
+        .expect_err("ambiguous cwd match must refuse rather than guess");
+    let message = format!("{error:#}");
+
+    assert!(message.contains("session-older"));
+    assert!(message.contains("session-newer"));
+    assert!(message.contains("--session-id"));
+    assert!(message.contains("2026-07-02T12:00:00"));
+    assert!(message.contains("2026-07-05T12:00:00"));
+}

@@ -48,9 +48,18 @@ pub(crate) fn resolve_pane_env() -> Result<PaneEnv> {
 /// Resolves the session id (and transcript path, when known) a rebind should
 /// report. Explicit overrides win outright; otherwise this reuses the same
 /// transcript discovery `status`/`watch` already rely on
-/// (`sessions::discover_recent_sessions`) and picks the most recent session
-/// whose transcript `cwd` matches the caller's cwd — the newest *.jsonl for
-/// this pane's project, not a reinvented scan.
+/// (`sessions::discover_recent_sessions`) and matches by transcript `cwd`.
+///
+/// When exactly one recent session matches the cwd, that one auto-discovers
+/// and reports — the newest *.jsonl for this pane's project, not a
+/// reinvented scan. When more than one recent session shares the cwd (the
+/// normal condition for a multi-pane repo like this one), this refuses
+/// outright rather than guessing the newest: mirrors
+/// `herdr::matching_panes_for_session`'s hard-block discipline for ambiguous
+/// cwd ties. A live smoke test of the first cut of this command (2026-07-07,
+/// commit 7f32423) picked the wrong session under exactly this condition and
+/// sent a real report for it — herdr happened not to durably apply the
+/// mismatched binding, but the tool must not depend on that.
 pub(crate) fn resolve_target_session(
     config: &Config,
     session_id_override: Option<&str>,
@@ -72,16 +81,41 @@ pub(crate) fn resolve_target_session(
     let sessions = discover_recent_sessions(config, now)
         .context("discover recent Claude transcript sessions")?;
     let normalized_cwd = normalize_path(cwd);
-    let session = sessions
+    let matches = sessions
         .iter()
-        .find(|session| session.cwd.as_deref().map(normalize_path) == Some(normalized_cwd.clone()))
-        .with_context(|| {
-            format!(
-                "no recent Claude transcript session found for cwd {}; pass --session-id or \
-                 --transcript-path",
-                cwd.display()
-            )
-        })?;
+        .filter(|session| {
+            session.cwd.as_deref().map(normalize_path) == Some(normalized_cwd.clone())
+        })
+        .collect::<Vec<_>>();
+
+    let session = match matches.as_slice() {
+        [] => bail!(
+            "no recent Claude transcript session found for cwd {}; pass --session-id or \
+             --transcript-path",
+            cwd.display()
+        ),
+        [session] => *session,
+        _ => {
+            let candidates = matches
+                .iter()
+                .map(|session| {
+                    format!(
+                        "  {} (last activity {})",
+                        session.session_id,
+                        session.last_event_at.to_rfc3339()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            bail!(
+                "{} recent Claude transcript sessions share cwd {}; refusing to guess which one \
+                 this pane is. Candidates:\n{candidates}\nPass --session-id or --transcript-path \
+                 to disambiguate.",
+                matches.len(),
+                cwd.display(),
+            );
+        }
+    };
 
     let transcript_path = config
         .projects_dir
