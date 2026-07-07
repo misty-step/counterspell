@@ -16,7 +16,10 @@ use crate::config::{
 use crate::dashboard;
 use crate::defaults::DEFAULT_TARGET_MODEL;
 use crate::feed::append_feed_events;
-use crate::herdr::{annotate_herdr_pane, load_herdr_panes, matching_panes_for_session, pane_id};
+use crate::herdr::{
+    annotate_herdr_pane, load_herdr_panes, matching_panes_for_session, pane_id, run_herdr_args,
+    session_reporting_broken,
+};
 use crate::indicators::{
     launch_agent_path, launch_agent_scheduled, load_launch_agent, swiftbar_plugin_path,
     watch_arm_launch_agent_path, write_launch_agent, write_swiftbar_plugin,
@@ -590,7 +593,31 @@ fn watch(cli: &Cli, args: &WatchArgs) -> Result<()> {
         return Ok(());
     }
 
-    let panes = load_herdr_panes().context("load Herdr panes for watch")?;
+    let mut panes = load_herdr_panes().context("load Herdr panes for watch")?;
+    if session_reporting_broken(&panes) {
+        eprintln!(
+            "warning: no Herdr claude pane reported an agent_session; the SessionStart hook \
+             is likely unwired from settings.json (see herdr::session_reporting_broken). \
+             Re-running `herdr integration install claude` to restore session binding."
+        );
+        match run_herdr_args(&["integration", "install", "claude"]) {
+            Ok(_) => match load_herdr_panes() {
+                Ok(refreshed) => panes = refreshed,
+                Err(error) => {
+                    eprintln!("warning: reload Herdr panes after self-heal failed: {error:#}")
+                }
+            },
+            Err(error) => {
+                eprintln!("warning: self-heal `herdr integration install claude` failed: {error:#}")
+            }
+        }
+        if session_reporting_broken(&panes) {
+            eprintln!(
+                "warning: still no agent_session reported after self-heal; already-open panes \
+                 need a fresh SessionStart (e.g. a Claude Code restart) to pick up the hook."
+            );
+        }
+    }
     let (rows, store_changed, feed_events) = watch_rows(
         &sessions,
         &panes,

@@ -1092,6 +1092,75 @@ target_model = "claude-fable-5"
 }
 
 #[test]
+fn watch_self_heals_herdr_integration_when_no_pane_reports_a_session() {
+    // Reproduces the 2026-07-07 incident: a settings.json rewrite dropped the
+    // herdr SessionStart hook, so every claude pane stopped reporting
+    // agent_session, cwd-fallback matching became permanently ambiguous, and
+    // remediation silently never fired. `watch` must notice zero session
+    // reporting across all claude panes and re-run the installer itself
+    // rather than gate forever without a trace.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let cwd = temp.path().join("repo");
+    fs::create_dir_all(&cwd).expect("cwd");
+    write_transcript_with_models(
+        &projects,
+        "-Users-phaedrus-Development-adminifi",
+        "adminifi-session",
+        &cwd,
+        &["claude-fable-5"],
+    );
+    let config = write_config(
+        temp.path(),
+        r#"
+[[targets]]
+session_id = "adminifi-session"
+target_model = "claude-fable-5"
+"#,
+    );
+    let state = temp.path().join("state.json");
+    // Two claude panes share the cwd and neither reports an agent_session —
+    // exactly what herdr returns once its SessionStart hook is unwired.
+    let (fake_herdr, fixture) = fake_herdr_with_sessions(
+        temp.path(),
+        &[
+            ("w13:p1", &cwd, "claude", "idle", false, None),
+            ("w13:p2", &cwd, "claude", "idle", false, None),
+        ],
+    );
+    let herdr_log = temp.path().join("herdr.log");
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("--recent-hours")
+        .arg("999")
+        .arg("watch")
+        .env("HOME", temp.path())
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .env("COUNTERSPELL_HERDR_LOG", &herdr_log)
+        .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "no Herdr claude pane reported an agent_session",
+        ));
+
+    let log = fs::read_to_string(&herdr_log).expect("herdr log");
+    assert!(
+        log.lines()
+            .any(|line| line.contains("integration install claude")),
+        "watch should self-heal by re-running the herdr integration installer, log: {log}"
+    );
+}
+
+#[test]
 fn watch_auto_targets_fable_history_without_explicit_target() {
     let temp = tempfile::tempdir().expect("tempdir");
     let projects = temp.path().join("projects");

@@ -2,8 +2,8 @@ use super::*;
 use crate::config::{parse_config_file, remove_session_target_from_config};
 use crate::dashboard::{build_dashboard_snapshot, render_dashboard_html};
 use crate::herdr::{
-    matching_panes_for_session, pane_id, pane_session_id, HerdrAgentSession, HerdrTab,
-    HerdrWorkspace,
+    matching_panes_for_session, pane_id, pane_session_id, session_reporting_broken,
+    HerdrAgentSession, HerdrTab, HerdrWorkspace,
 };
 use std::io::Write;
 
@@ -555,6 +555,30 @@ fn path_kind_agent_session_binds_by_file_stem() {
     let panes = vec![pane];
     let matches = matching_panes_for_session("session-1", None, &panes);
     assert_eq!(matches.len(), 1);
+}
+
+#[test]
+fn session_reporting_broken_true_when_every_claude_pane_lacks_a_session() {
+    let mut other = idle_pane();
+    other.pane_id = "pane-2".to_string();
+    let panes = vec![idle_pane(), other];
+
+    assert!(session_reporting_broken(&panes));
+}
+
+#[test]
+fn session_reporting_broken_false_when_any_claude_pane_reports_a_session() {
+    let mut bound = idle_pane();
+    bound.pane_id = "pane-2".to_string();
+    bound.agent_session = bound_session("session-1");
+    let panes = vec![idle_pane(), bound];
+
+    assert!(!session_reporting_broken(&panes));
+}
+
+#[test]
+fn session_reporting_broken_false_when_no_claude_panes_exist() {
+    assert!(!session_reporting_broken(&[]));
 }
 
 #[test]

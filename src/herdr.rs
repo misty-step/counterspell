@@ -227,6 +227,23 @@ pub(crate) fn pane_session_id(pane: &HerdrPane) -> Option<&str> {
     }
 }
 
+/// True when at least one live `claude` pane exists but *none* of them has
+/// ever reported an `agent_session` — the signature of the SessionStart hook
+/// (`herdr integration install claude`) being unwired from `settings.json`.
+/// When this holds, `matching_panes_for_session` degrades to cwd-only
+/// fallback for every session sharing a project directory, so multi-pane
+/// projects gate on `ambiguous-pane` forever and remediation never fires
+/// (root cause of the 2026-07-07 unremediated drift: a settings.json rewrite
+/// during the harness-kit->roster hook cutover dropped the herdr SessionStart
+/// entry, and every subsequently started pane lost session reporting).
+pub(crate) fn session_reporting_broken(panes: &[HerdrPane]) -> bool {
+    let mut claude_panes = panes
+        .iter()
+        .filter(|pane| pane.agent.as_deref() == Some("claude"))
+        .peekable();
+    claude_panes.peek().is_some() && claude_panes.all(|pane| pane_session_id(pane).is_none())
+}
+
 /// Binds a transcript session to Herdr panes. A pane whose agent reported
 /// this exact session id is authoritative. Only when no pane anywhere claims
 /// the session do we fall back to cwd matching, and even then panes bound to
