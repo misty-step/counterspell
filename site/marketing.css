@@ -1,0 +1,166 @@
+/* Product brand hooks: edit these from DESIGN.md, then leave the rest alone. */
+:root {
+  --ae-accent: #2643d0;
+  --ae-accent-dark: #8c9eff;
+}
+
+.msk-bar,
+.msk-footer {
+  width: min(var(--ae-measure-wide), 100% - 5rem);
+}
+
+.msk-actions {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--ae-space-5);
+}
+
+.msk-nav {
+  display: inline-flex;
+  gap: var(--ae-space-5);
+}
+
+.msk-nav a[aria-current='page'] {
+  color: var(--ae-ink);
+  text-decoration-color: currentColor;
+}
+
+.msk-page {
+  width: min(var(--ae-measure-wide), 100%);
+  display: grid;
+  gap: var(--ae-space-8);
+}
+
+/* ── hero screen (index only): full-viewport image, no page scroll ──── */
+
+.msk-hero-screen {
+  position: relative;
+}
+
+.msk-hero-screen > .ae-bar,
+.msk-hero-screen > .msk-hero-stage {
+  position: relative;
+  z-index: 1;
+}
+
+.msk-hero-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-image: var(--msk-hero-image);
+  background-size: cover;
+  background-position: center;
+  opacity: var(--msk-hero-opacity, 0.35);
+}
+
+.msk-hero-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  /* left edge lines up with the header logo's left edge, computed the
+     same way .ae-wide sizes the bar, rather than a second hardcoded
+     measure */
+  padding-inline: max(calc((100% - var(--ae-measure-wide)) / 2), 2.5rem);
+}
+
+.msk-hero-copy {
+  display: grid;
+  gap: var(--ae-space-5);
+  max-width: 52%;
+  background: var(--ae-wash);
+  background: color-mix(in srgb, var(--ae-surface) 62%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1px solid var(--ae-line);
+  padding: var(--ae-space-6);
+}
+
+.msk-hero-title {
+  font-weight: var(--ae-w-bold);
+  color: var(--ae-ink);
+  text-wrap: balance;
+  font-size: clamp(1.7rem, 2.8vw, 2.6rem);
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  max-width: 24ch;
+}
+
+@media (max-width: 780px) {
+  /* qualified with .ae-wide, not just .msk-bar/.msk-footer: aesthetic.css's
+     `.ae-wide .ae-bar` rule (two classes) otherwise outranks the plain
+     one-class selector here and this override never takes effect, leaving
+     80px of dead margin at phone widths — the actual cause of the nav
+     "crowding" bug (aesthetic-910), confirmed by measuring the live
+     bounding box at 390px. */
+  .ae-wide .msk-bar,
+  .ae-wide .msk-footer {
+    width: min(var(--ae-measure), 100% - 2rem);
+  }
+
+  .msk-actions,
+  .msk-nav {
+    flex-wrap: wrap;
+    gap: var(--ae-space-3);
+  }
+
+  .msk-hero-stage {
+    padding-inline: 1.25rem;
+  }
+
+  .msk-hero-copy {
+    max-width: 100%;
+  }
+
+  .msk-gallery {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── footer chrome: mode toggle left, exit links right (all pages) ──── */
+
+.msk-footer {
+  align-items: center;
+}
+
+.ae-foot-links {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ae-space-3);
+}
+
+.ae-foot-links .ae-icon {
+  width: 1.35em;
+  height: 1.35em;
+}
+
+/* ── moved content (features.html, changelog.html) ───────────────────── */
+
+.msk-section {
+  border-top: 1px solid var(--ae-line);
+  padding-top: var(--ae-space-6);
+  display: grid;
+  gap: var(--ae-space-5);
+}
+
+.msk-section-head {
+  display: grid;
+  gap: var(--ae-space-2);
+  max-width: 42rem;
+}
+
+.msk-release-slot {
+  max-width: 42rem;
+}
+
+.msk-release {
+  border-top: 1px solid var(--ae-line);
+  padding-top: var(--ae-space-5);
+  display: grid;
+  gap: var(--ae-space-3);
+}
+
+.msk-release:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
