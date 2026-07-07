@@ -45,9 +45,10 @@ pub(crate) fn print_status_json(
     rows: &[StatusRow],
     store: &WatchStore,
     now: DateTime<Utc>,
+    master_disarmed: bool,
 ) -> Result<()> {
     let output = StatusOutput {
-        summary: status_summary(rows, store, now),
+        summary: status_summary(rows, store, now, master_disarmed),
         rows,
     };
     println!("{}", serde_json::to_string_pretty(&output)?);
@@ -58,6 +59,7 @@ pub(crate) fn status_summary(
     rows: &[StatusRow],
     store: &WatchStore,
     now: DateTime<Utc>,
+    master_disarmed: bool,
 ) -> StatusSummary {
     let last_trigger_unix = store
         .sessions
@@ -80,6 +82,7 @@ pub(crate) fn status_summary(
             .and_then(unix_to_utc)
             .map(|timestamp| human_age(timestamp, now)),
         last_trigger_unix,
+        master_disarmed,
     }
 }
 

@@ -823,6 +823,7 @@ fn dashboard_render_shows_herdr_panes_and_session_toggles() {
             label: Some("pure act".to_string()),
             number: Some(19),
         }],
+        false,
     );
 
     let html = render_dashboard_html(&snapshot);
@@ -861,6 +862,7 @@ fn dashboard_render_marks_fable_history_sessions_auto() {
             label: Some("pure act".to_string()),
             number: Some(19),
         }],
+        false,
     );
 
     let html = render_dashboard_html(&snapshot);

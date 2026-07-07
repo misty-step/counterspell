@@ -119,6 +119,9 @@ pub(crate) struct StatusSummary {
     pub(crate) live_panes: usize,
     pub(crate) last_trigger_event: Option<String>,
     pub(crate) last_trigger_unix: Option<u64>,
+    /// Global master switch: true means `watch --arm` is refusing to act
+    /// regardless of drift or targets.
+    pub(crate) master_disarmed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

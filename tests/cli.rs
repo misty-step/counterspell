@@ -1897,6 +1897,304 @@ fn rebind_verify_confirms_pane_now_reports_the_session() {
 }
 
 #[test]
+fn watch_arm_takes_no_action_when_master_switch_disabled() {
+    // Safety-critical: same drifted-session fixture as
+    // `watch_reports_compact_then_switch_when_drift_is_gated` (which proves
+    // the armed path DOES remediate), but with the master switch off. Proves
+    // the gate is airtight: not just "no keystrokes sent" but "Herdr was
+    // never even queried" and "session state was never touched" — the
+    // disabled path must exit before planning anything.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let cwd = temp.path().join("repo");
+    fs::create_dir_all(&cwd).expect("cwd");
+    write_transcript_with_models(
+        &projects,
+        "-Users-phaedrus-Development-adminifi",
+        "adminifi-session",
+        &cwd,
+        &["claude-fable-5", "claude-opus-4-8"],
+    );
+    let config = write_config(
+        temp.path(),
+        r#"
+[[targets]]
+session_id = "adminifi-session"
+target_model = "claude-fable-5"
+"#,
+    );
+    let state = temp.path().join("state.json");
+    let marker = temp.path().join("disarmed");
+    fs::write(&marker, "disarmed at test time\n").expect("seed disarm marker");
+    let herdr_log = temp.path().join("herdr.log");
+    let (fake_herdr, fixture) = fake_herdr(
+        temp.path(),
+        &[("w13:p1", &cwd, "claude", "idle", "adminifi")],
+    );
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("--disarm-marker")
+        .arg(&marker)
+        .arg("--recent-hours")
+        .arg("999")
+        .arg("watch")
+        .arg("--arm")
+        .env("HOME", temp.path())
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .env("COUNTERSPELL_HERDR_LOG", &herdr_log)
+        .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "counterspell is DISABLED (master switch off); taking no action",
+        ))
+        .stdout(predicate::str::contains("compact then switch").not())
+        .stdout(predicate::str::contains("watch pass").not());
+
+    assert!(
+        !herdr_log.exists(),
+        "disabled watch --arm must never even query Herdr panes, let alone send keystrokes"
+    );
+    assert!(
+        !state.exists(),
+        "disabled watch --arm must never touch session state"
+    );
+}
+
+#[test]
+fn watch_arm_still_remediates_when_marker_absent() {
+    // Companion to the disabled-gate test above: with no marker file at all
+    // (the default, pre-existing-install state), `watch --arm` must behave
+    // exactly as it did before the master switch existed. Guards against a
+    // regression where the gate defaults to blocking.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    let cwd = temp.path().join("repo");
+    fs::create_dir_all(&cwd).expect("cwd");
+    write_transcript_with_models(
+        &projects,
+        "-Users-phaedrus-Development-adminifi",
+        "adminifi-session",
+        &cwd,
+        &["claude-fable-5", "claude-opus-4-8"],
+    );
+    let config = write_config(
+        temp.path(),
+        r#"
+[[targets]]
+session_id = "adminifi-session"
+target_model = "claude-fable-5"
+"#,
+    );
+    let state = temp.path().join("state.json");
+    let marker = temp.path().join("disarmed");
+    let (fake_herdr, fixture) = fake_herdr(
+        temp.path(),
+        &[("w13:p1", &cwd, "claude", "idle", "adminifi")],
+    );
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("--disarm-marker")
+        .arg(&marker)
+        .arg("--recent-hours")
+        .arg("999")
+        .arg("watch")
+        .arg("--arm")
+        .env("HOME", temp.path())
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("watch pass"))
+        .stdout(predicate::str::contains(
+            "compact then switch:claude-fable-5",
+        ));
+
+    assert!(!marker.exists(), "test must not have created a marker");
+}
+
+#[test]
+fn disable_command_writes_marker_without_touching_launchctl() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let marker = temp.path().join("disarmed");
+    let launchctl_log = temp.path().join("launchctl.log");
+    let launchctl = fake_launchctl(temp.path(), true);
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--disarm-marker")
+        .arg(&marker)
+        .arg("disable")
+        .env("HOME", temp.path())
+        .env("COUNTERSPELL_LAUNCHCTL_BIN", &launchctl)
+        .env("COUNTERSPELL_LAUNCHCTL_LOG", &launchctl_log)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("counterspell DISABLED"));
+
+    assert!(marker.exists(), "disable must create the marker file");
+    assert!(
+        !launchctl_log.exists(),
+        "disable must be instant: it must never shell out to launchctl"
+    );
+}
+
+#[test]
+fn enable_command_clears_marker_and_reloads_watch_arm_agent() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let marker = temp.path().join("disarmed");
+    fs::write(&marker, "disarmed at test time\n").expect("seed disarm marker");
+    let launchctl_log = temp.path().join("launchctl.log");
+    let launchctl = fake_launchctl(temp.path(), true);
+
+    // Install (write, do not load) the watch-arm plist so `enable` has
+    // something on disk to (re)load.
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("install-ui")
+        .arg("--no-swiftbar")
+        .arg("--no-herdr-annotation")
+        .env("HOME", temp.path())
+        .assert()
+        .success();
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--disarm-marker")
+        .arg(&marker)
+        .arg("enable")
+        .env("HOME", temp.path())
+        .env("COUNTERSPELL_LAUNCHCTL_BIN", &launchctl)
+        .env("COUNTERSPELL_LAUNCHCTL_LOG", &launchctl_log)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("counterspell ENABLED"))
+        .stdout(predicate::str::contains(
+            "watch-arm LaunchAgent: enabled and loaded",
+        ));
+
+    assert!(!marker.exists(), "enable must clear the marker file");
+    let log = fs::read_to_string(&launchctl_log).expect("launchctl log");
+    assert!(
+        log.contains("enable gui/"),
+        "enable must undo a persistent `launchctl disable`, got: {log}"
+    );
+    assert!(log.contains("bootstrap"), "enable must (re)load the agent");
+    assert!(
+        log.contains("kickstart -k"),
+        "enable must kick the freshly loaded agent"
+    );
+}
+
+#[test]
+fn enable_command_without_installed_agent_still_clears_marker() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let marker = temp.path().join("disarmed");
+    fs::write(&marker, "disarmed at test time\n").expect("seed disarm marker");
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--disarm-marker")
+        .arg(&marker)
+        .arg("enable")
+        .env("HOME", temp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("counterspell ENABLED"))
+        .stdout(predicate::str::contains(
+            "watch-arm LaunchAgent: not installed",
+        ));
+
+    assert!(!marker.exists(), "enable must clear the marker file");
+}
+
+#[test]
+fn status_and_doctor_display_master_switch_state() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let projects = temp.path().join("projects");
+    fs::create_dir_all(&projects).expect("projects");
+    let config = write_config(temp.path(), "");
+    let state = temp.path().join("state.json");
+    let marker = temp.path().join("disarmed");
+    fs::write(&marker, "disarmed at test time\n").expect("seed disarm marker");
+    let (fake_herdr, fixture) = fake_herdr(temp.path(), &[]);
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("--disarm-marker")
+        .arg(&marker)
+        .arg("status")
+        .env("HOME", temp.path())
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("master switch: DISABLED"));
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("--disarm-marker")
+        .arg(&marker)
+        .arg("status")
+        .arg("--json")
+        .env("HOME", temp.path())
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"master_disarmed\": true"));
+
+    let launchctl = fake_launchctl(temp.path(), true);
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("--disarm-marker")
+        .arg(&marker)
+        .arg("doctor")
+        .env("HOME", temp.path())
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .env("COUNTERSPELL_LAUNCHCTL_BIN", &launchctl)
+        .assert()
+        .stdout(predicate::str::contains(
+            format!("master switch: DISABLED ({})", marker.display()).as_str(),
+        ));
+}
+
+#[test]
 fn rebind_verify_fails_when_pane_still_reports_a_different_session() {
     let temp = tempfile::tempdir().expect("tempdir");
     let socket_path = temp.path().join("herdr.sock");

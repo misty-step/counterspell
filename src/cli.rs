@@ -25,6 +25,7 @@ use crate::indicators::{
     watch_arm_launch_agent_path, write_launch_agent, write_swiftbar_plugin,
     write_watch_arm_launch_agent, LAUNCH_AGENT_LABEL, WATCH_ARM_LAUNCH_AGENT_LABEL,
 };
+use crate::master;
 use crate::model::FileConfig;
 use crate::output::{print_status, print_status_json, print_watch};
 use crate::rebind::{
@@ -58,6 +59,11 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "HOURS")]
     pub(crate) recent_hours: Option<u64>,
 
+    /// Global master-switch marker path. Overrides the default
+    /// `~/.counterspell/disarmed`; mainly for tests and alternate installs.
+    #[arg(long, global = true, value_name = "PATH")]
+    pub(crate) disarm_marker: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -70,6 +76,11 @@ enum Commands {
     Setup(SetupArgs),
     /// Inspect local install, config, Herdr, and indicator state.
     Doctor(DoctorArgs),
+    /// Turn the global master switch OFF: `watch --arm` takes no action.
+    Disable(DisableArgs),
+    /// Turn the global master switch back ON and ensure the watch-arm
+    /// LaunchAgent is loaded.
+    Enable(EnableArgs),
     /// Manage configured targets for extra coverage.
     Target(TargetArgs),
     /// Install menu-bar and Herdr annotation indicators.
@@ -141,6 +152,12 @@ struct SetupArgs {
 
 #[derive(Debug, Args)]
 struct DoctorArgs {}
+
+#[derive(Debug, Args)]
+struct DisableArgs {}
+
+#[derive(Debug, Args)]
+struct EnableArgs {}
 
 #[derive(Debug, Args)]
 struct TargetArgs {
@@ -265,6 +282,8 @@ pub fn run(cli: Cli) -> Result<()> {
         Some(Commands::Init(args)) => init(&cli, args),
         Some(Commands::Setup(args)) => setup(&cli, args),
         Some(Commands::Doctor(args)) => doctor(&cli, args),
+        Some(Commands::Disable(_args)) => disable_master(&cli),
+        Some(Commands::Enable(_args)) => enable_master(&cli),
         Some(Commands::Target(args)) => target(&cli, args),
         Some(Commands::InstallUi(args)) => install_ui(args),
         Some(Commands::Ui(args)) => dashboard::serve_dashboard(&cli, args),
@@ -283,6 +302,7 @@ pub(crate) fn test_cli_with_config(config: PathBuf) -> Cli {
         config: Some(config),
         projects_dir: None,
         recent_hours: None,
+        disarm_marker: None,
         command: None,
     }
 }
@@ -362,6 +382,13 @@ fn doctor(cli: &Cli, _args: &DoctorArgs) -> Result<()> {
     let mut failures = Vec::new();
 
     println!("counterspell doctor");
+    let marker = master::marker_path(cli.disarm_marker.clone())?;
+    let disarmed = master::is_disarmed(&marker);
+    println!(
+        "master switch: {} ({})",
+        master::state_label(disarmed),
+        marker.display()
+    );
     let binary_path = env::current_exe().ok();
     println!(
         "binary: {}",
@@ -526,6 +553,37 @@ fn doctor(cli: &Cli, _args: &DoctorArgs) -> Result<()> {
     Ok(())
 }
 
+fn disable_master(cli: &Cli) -> Result<()> {
+    let marker = master::marker_path(cli.disarm_marker.clone())?;
+    master::disable(&marker)?;
+    println!(
+        "counterspell {} ({})",
+        master::state_label(true),
+        marker.display()
+    );
+    println!("watch --arm will take no action until `counterspell enable` is run");
+    Ok(())
+}
+
+fn enable_master(cli: &Cli) -> Result<()> {
+    let home = home_dir()?;
+    let marker = master::marker_path(cli.disarm_marker.clone())?;
+    let outcome = master::enable(&marker, &home)?;
+    println!(
+        "counterspell {} ({})",
+        master::state_label(false),
+        marker.display()
+    );
+    if outcome.launch_agent_loaded {
+        println!("watch-arm LaunchAgent: enabled and loaded");
+    } else {
+        println!(
+            "watch-arm LaunchAgent: not installed (run `counterspell install-ui` to schedule automatic passes)"
+        );
+    }
+    Ok(())
+}
+
 fn target(cli: &Cli, args: &TargetArgs) -> Result<()> {
     let home = home_dir()?;
     let path = config_path(cli.config.clone(), &home);
@@ -608,6 +666,19 @@ fn install_ui(args: &InstallUiArgs) -> Result<()> {
 }
 
 fn watch(cli: &Cli, args: &WatchArgs) -> Result<()> {
+    // Safety-critical gate: the master switch is checked before anything
+    // else on the acting path — before config, sessions, or Herdr panes are
+    // even loaded — so a disabled switch can never plan or execute
+    // remediation, no matter what `[[targets]]` says. Bare `watch` (no
+    // `--arm`) is dry-run/status-reporting only and is never gated here.
+    if args.arm {
+        let marker = master::marker_path(cli.disarm_marker.clone())?;
+        if master::is_disarmed(&marker) {
+            println!("counterspell is DISABLED (master switch off); taking no action");
+            return Ok(());
+        }
+    }
+
     let config = load_config(cli)?;
     let now = Utc::now();
     let state_path = state_path(cli.state.clone())?;
@@ -689,12 +760,17 @@ fn status(cli: &Cli, args: &StatusArgs) -> Result<()> {
     let sessions = discover_recent_sessions(&config, now)?;
     let panes = load_herdr_panes().context("load Herdr panes for session status")?;
     let rows = status_rows(&sessions, &panes, &store, &config, now);
+    let marker = master::marker_path(cli.disarm_marker.clone())?;
+    let disarmed = master::is_disarmed(&marker);
     if args.json {
-        print_status_json(&rows, &store, now)?;
-    } else if rows.is_empty() {
-        println!("no recent sessions");
+        print_status_json(&rows, &store, now, disarmed)?;
     } else {
-        print_status(&rows);
+        println!("master switch: {}", master::state_label(disarmed));
+        if rows.is_empty() {
+            println!("no recent sessions");
+        } else {
+            print_status(&rows);
+        }
     }
     Ok(())
 }

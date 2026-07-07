@@ -38,6 +38,7 @@ pub(crate) fn render_dashboard_html(snapshot: &DashboardSnapshot) -> String {
   <style>{}</style>
 </head>
 <body>
+  {}
   <main class="shell">
     <aside class="rail">
       <div>
@@ -69,6 +70,7 @@ pub(crate) fn render_dashboard_html(snapshot: &DashboardSnapshot) -> String {
 </html>
 "#,
         style(),
+        render_master_banner(snapshot.master_disarmed),
         snapshot.summary.claude_panes,
         snapshot.summary.enabled_panes,
         snapshot.summary.enabled_sessions,
@@ -77,6 +79,36 @@ pub(crate) fn render_dashboard_html(snapshot: &DashboardSnapshot) -> String {
         body,
         script()
     )
+}
+
+/// The master on/off control: a full-width banner above everything else on
+/// the page, so the operator can never be unsure whether counterspell is
+/// live. Exactly one action is offered — the one that flips current state —
+/// same as the per-session Enable/Disable controls below it.
+fn render_master_banner(disarmed: bool) -> String {
+    if disarmed {
+        r#"<header class="master-bar is-disarmed" aria-label="Counterspell master switch">
+  <div>
+    <strong>Counterspell: DISABLED</strong>
+    <span>Master switch is off. No drift will be remediated, no keystrokes sent.</span>
+  </div>
+  <form method="post" action="/master/enable">
+    <button class="master-toggle" type="submit">Turn ON</button>
+  </form>
+</header>"#
+            .to_string()
+    } else {
+        r#"<header class="master-bar is-armed" aria-label="Counterspell master switch">
+  <div>
+    <strong>Counterspell: ENABLED</strong>
+    <span>Master switch is on. Configured drift will be remediated automatically.</span>
+  </div>
+  <form method="post" action="/master/disable">
+    <button class="master-toggle" type="submit">Turn OFF</button>
+  </form>
+</header>"#
+            .to_string()
+    }
 }
 
 fn workspace_groups(panes: &[ClaudePaneView]) -> Vec<WorkspaceGroup<'_>> {
@@ -427,6 +459,47 @@ h1, p { margin: 0; font-size: 1em; }
 h1, strong { font-weight: 800; }
 a { color: var(--ink); text-underline-offset: .18em; }
 button, a { cursor: pointer; }
+.master-bar {
+  padding: 1em 1.5em;
+  border-bottom: 4px solid;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1.5em;
+  flex-wrap: wrap;
+}
+.master-bar strong {
+  display: block;
+  font-size: 1.1em;
+  letter-spacing: .03em;
+}
+.master-bar span { font-family: var(--mono); font-size: 13px; }
+.master-bar.is-armed {
+  background: var(--err);
+  border-color: var(--err);
+  color: #1b0d0a;
+}
+.master-bar.is-armed span { color: #1b0d0a; opacity: .82; }
+.master-bar.is-disarmed {
+  background: var(--wash);
+  border-color: var(--line);
+  color: var(--ink);
+}
+.master-bar.is-disarmed span { color: var(--muted); }
+.master-bar form { margin: 0; }
+.master-toggle {
+  min-height: 44px;
+  padding: 0 1.25em;
+  border: 2px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.master-bar.is-armed .master-toggle { color: #1b0d0a; }
+.master-bar.is-disarmed .master-toggle { border-color: var(--ink); color: var(--ink); }
 .shell {
   display: grid;
   grid-template-columns: 18rem minmax(0, 1fr);

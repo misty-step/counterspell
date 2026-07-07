@@ -6,6 +6,7 @@ mod defaults;
 mod feed;
 mod herdr;
 mod indicators;
+mod master;
 mod model;
 mod output;
 mod rebind;

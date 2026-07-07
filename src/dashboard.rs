@@ -15,6 +15,7 @@ use crate::defaults::DEFAULT_TARGET_MODEL;
 use crate::herdr::{
     load_herdr_panes, load_herdr_tabs, load_herdr_workspaces, HerdrPane, HerdrTab, HerdrWorkspace,
 };
+use crate::master;
 use crate::model::{Config, TargetRule, TranscriptSession};
 use crate::remediation::{format_target_match, is_auto_fable_target, target_for_session};
 use crate::sessions::discover_recent_sessions;
@@ -26,6 +27,11 @@ pub(crate) struct DashboardSnapshot {
     pub(crate) generated_at: DateTime<Utc>,
     pub(crate) panes: Vec<ClaudePaneView>,
     pub(crate) summary: DashboardSummary,
+    /// Global master switch: true means `watch --arm` is refusing to act
+    /// regardless of drift or per-session targets. Rendered as a prominent
+    /// banner above everything else on the page — this is a safety control,
+    /// never ambiguous about which state it's in.
+    pub(crate) master_disarmed: bool,
 }
 
 pub(crate) struct DashboardSummary {
@@ -99,6 +105,8 @@ pub(crate) fn load_dashboard_snapshot(cli: &Cli) -> Result<DashboardSnapshot> {
     let panes = load_herdr_panes().context("load Herdr panes for dashboard")?;
     let workspaces = load_herdr_workspaces().context("load Herdr workspaces for dashboard")?;
     let tabs = load_all_tabs(&workspaces)?;
+    let marker = master::marker_path(cli.disarm_marker.clone())?;
+    let master_disarmed = master::is_disarmed(&marker);
     Ok(build_dashboard_snapshot(
         generated_at,
         &config,
@@ -106,9 +114,11 @@ pub(crate) fn load_dashboard_snapshot(cli: &Cli) -> Result<DashboardSnapshot> {
         &panes,
         &workspaces,
         &tabs,
+        master_disarmed,
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_dashboard_snapshot(
     generated_at: DateTime<Utc>,
     config: &Config,
@@ -116,6 +126,7 @@ pub(crate) fn build_dashboard_snapshot(
     panes: &[HerdrPane],
     workspaces: &[HerdrWorkspace],
     tabs: &[HerdrTab],
+    master_disarmed: bool,
 ) -> DashboardSnapshot {
     let workspaces_by_id = workspaces
         .iter()
@@ -217,6 +228,7 @@ pub(crate) fn build_dashboard_snapshot(
         generated_at,
         panes: claude_panes,
         summary,
+        master_disarmed,
     }
 }
 
@@ -292,6 +304,20 @@ where
                 return respond_forbidden(stream);
             }
             disable_session_target(cli, &request.form)?;
+            redirect_home(stream)
+        }
+        ("POST", "/master/enable") => {
+            if !csrf_allowed(&request.headers, local_addr) {
+                return respond_forbidden(stream);
+            }
+            enable_master_switch(cli)?;
+            redirect_home(stream)
+        }
+        ("POST", "/master/disable") => {
+            if !csrf_allowed(&request.headers, local_addr) {
+                return respond_forbidden(stream);
+            }
+            disable_master_switch(cli)?;
             redirect_home(stream)
         }
         ("GET", "/favicon.ico") => respond(stream, "204 No Content", "text/plain", String::new()),
@@ -407,6 +433,24 @@ fn disable_session_target(cli: &Cli, form: &BTreeMap<String, String>) -> Result<
     Ok(())
 }
 
+/// Flag-only: flips the same marker file the CLI `enable`/`disable`
+/// commands use (never diverges on the actual gate state), but — unlike
+/// the CLI's `enable` — never touches launchd. See
+/// `crate::master::enable_flag_only` for why a browser-triggered route
+/// must not be able to reach `launchctl`.
+fn enable_master_switch(cli: &Cli) -> Result<()> {
+    let marker = master::marker_path(cli.disarm_marker.clone())?;
+    master::enable_flag_only(&marker)?;
+    Ok(())
+}
+
+/// Same code path as the CLI `counterspell disable` command.
+fn disable_master_switch(cli: &Cli) -> Result<()> {
+    let marker = master::marker_path(cli.disarm_marker.clone())?;
+    master::disable(&marker)?;
+    Ok(())
+}
+
 fn form_value<'a>(form: &'a BTreeMap<String, String>, key: &str) -> Result<&'a str> {
     form.get(key)
         .map(String::as_str)
@@ -472,6 +516,7 @@ fn render_dashboard_json(snapshot: &DashboardSnapshot) -> String {
 
     serde_json::to_string_pretty(&json!({
         "generated_at": snapshot.generated_at.to_rfc3339(),
+        "master_disarmed": snapshot.master_disarmed,
         "summary": {
             "claude_panes": snapshot.summary.claude_panes,
             "enabled_panes": snapshot.summary.enabled_panes,
@@ -586,7 +631,19 @@ mod tests {
         headers: &[(&str, &str)],
         body: &str,
     ) -> String {
-        let cli = crate::cli::test_cli_with_config(config.to_path_buf());
+        send_dashboard_request_with_marker(config, None, method, path, headers, body)
+    }
+
+    fn send_dashboard_request_with_marker(
+        config: &Path,
+        marker: Option<&Path>,
+        method: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: &str,
+    ) -> String {
+        let mut cli = crate::cli::test_cli_with_config(config.to_path_buf());
+        cli.disarm_marker = marker.map(Path::to_path_buf);
         let mut request = format!(
             "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{TEST_PORT}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n",
             body.len()
@@ -714,5 +771,96 @@ target_model = "claude-fable-5"
                 .contains("csrf-disable-session"),
             "target must not be removed when Origin/Referer is missing"
         );
+    }
+
+    #[test]
+    fn dashboard_rejects_master_disable_without_origin_or_referer() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = write_config(temp.path(), "");
+        let marker = temp.path().join("disarmed");
+
+        let response = send_dashboard_request_with_marker(
+            &config,
+            Some(&marker),
+            "POST",
+            "/master/disable",
+            &[],
+            "",
+        );
+
+        assert!(
+            response.starts_with("HTTP/1.1 403"),
+            "expected 403, got: {response}"
+        );
+        assert!(
+            !marker.exists(),
+            "master switch must not flip when Origin/Referer is missing"
+        );
+    }
+
+    #[test]
+    fn dashboard_rejects_master_enable_with_mismatched_origin() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = write_config(temp.path(), "");
+        let marker = temp.path().join("disarmed");
+        std::fs::write(&marker, "disarmed").expect("seed marker");
+
+        let response = send_dashboard_request_with_marker(
+            &config,
+            Some(&marker),
+            "POST",
+            "/master/enable",
+            &[("Origin", "http://evil.example")],
+            "",
+        );
+
+        assert!(
+            response.starts_with("HTTP/1.1 403"),
+            "expected 403, got: {response}"
+        );
+        assert!(
+            marker.exists(),
+            "master switch must stay disabled when Origin does not match"
+        );
+    }
+
+    #[test]
+    fn dashboard_master_disable_then_enable_round_trips_with_matching_origin() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = write_config(temp.path(), "");
+        let marker = temp.path().join("disarmed");
+        let origin = format!("http://127.0.0.1:{TEST_PORT}");
+
+        assert!(!marker.exists(), "starts armed (no marker) in this test");
+
+        let response = send_dashboard_request_with_marker(
+            &config,
+            Some(&marker),
+            "POST",
+            "/master/disable",
+            &[("Origin", &origin)],
+            "",
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 303"),
+            "expected 303 redirect, got: {response}"
+        );
+        assert!(marker.exists(), "disable must create the marker file");
+
+        // Dashboard enable is flag-only (see enable_flag_only) — it never
+        // touches launchd, so this needs no HOME/plist isolation at all.
+        let response = send_dashboard_request_with_marker(
+            &config,
+            Some(&marker),
+            "POST",
+            "/master/enable",
+            &[("Origin", &origin)],
+            "",
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 303"),
+            "expected 303 redirect, got: {response}"
+        );
+        assert!(!marker.exists(), "enable must remove the marker file");
     }
 }

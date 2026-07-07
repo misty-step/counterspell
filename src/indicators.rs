@@ -142,17 +142,7 @@ fn write_counterspell_launch_agent(
 
 pub(crate) fn load_launch_agent(path: &Path, label: &str) -> Result<()> {
     let launchctl = launchctl_bin();
-    let uid_output = ProcessCommand::new("id")
-        .arg("-u")
-        .output()
-        .context("run id -u for launchctl domain")?;
-    if !uid_output.status.success() {
-        bail!("id -u exited with {}", uid_output.status);
-    }
-    let uid = String::from_utf8_lossy(&uid_output.stdout)
-        .trim()
-        .to_string();
-    let domain = format!("gui/{uid}");
+    let domain = gui_domain()?;
     let _ = ProcessCommand::new(&launchctl)
         .args(["bootout", &domain, &path.to_string_lossy()])
         .output();
@@ -184,6 +174,52 @@ pub(crate) fn load_launch_agent(path: &Path, label: &str) -> Result<()> {
 
 pub(crate) fn launch_agent_scheduled(label: &str) -> Result<bool> {
     let launchctl = launchctl_bin();
+    let service = format!("{}/{label}", gui_domain()?);
+    let output = ProcessCommand::new(launchctl)
+        .args(["print", &service])
+        .output()
+        .context("run launchctl print")?;
+    Ok(output.status.success())
+}
+
+/// Undo a persistent `launchctl disable` on the watch-arm service. Loading a
+/// disabled service via `bootstrap` succeeds but the job never actually
+/// runs, so the master switch's `enable` path must clear this override
+/// before (re)loading — otherwise the flag says armed while launchd quietly
+/// keeps refusing to schedule the job.
+pub(crate) fn enable_launch_agent(label: &str) -> Result<()> {
+    let launchctl = launchctl_bin();
+    let service = format!("{}/{label}", gui_domain()?);
+    let output = ProcessCommand::new(&launchctl)
+        .args(["enable", &service])
+        .output()
+        .context("run launchctl enable")?;
+    if !output.status.success() {
+        bail!(
+            "launchctl enable exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
+/// Ensure the watch-arm LaunchAgent is un-disabled and (re)loaded so a
+/// master-switch `enable` actually results in ticks, not just a cleared
+/// flag. Returns `false` (no error) when no plist has ever been installed —
+/// a valid state before `counterspell install-ui` has run, e.g. fresh dev
+/// checkouts and tests.
+pub(crate) fn ensure_watch_arm_loaded(home: &Path) -> Result<bool> {
+    let path = watch_arm_launch_agent_path(home);
+    if !path.exists() {
+        return Ok(false);
+    }
+    enable_launch_agent(WATCH_ARM_LAUNCH_AGENT_LABEL)?;
+    load_launch_agent(&path, WATCH_ARM_LAUNCH_AGENT_LABEL)?;
+    Ok(true)
+}
+
+fn gui_domain() -> Result<String> {
     let uid_output = ProcessCommand::new("id")
         .arg("-u")
         .output()
@@ -194,12 +230,7 @@ pub(crate) fn launch_agent_scheduled(label: &str) -> Result<bool> {
     let uid = String::from_utf8_lossy(&uid_output.stdout)
         .trim()
         .to_string();
-    let service = format!("gui/{uid}/{label}");
-    let output = ProcessCommand::new(launchctl)
-        .args(["print", &service])
-        .output()
-        .context("run launchctl print")?;
-    Ok(output.status.success())
+    Ok(format!("gui/{uid}"))
 }
 
 fn launchctl_bin() -> OsString {
