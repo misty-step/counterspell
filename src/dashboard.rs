@@ -15,8 +15,9 @@ use crate::defaults::DEFAULT_TARGET_MODEL;
 use crate::herdr::{
     load_herdr_panes, load_herdr_tabs, load_herdr_workspaces, HerdrPane, HerdrTab, HerdrWorkspace,
 };
+use crate::indicators::watch_arm_daemon_status;
 use crate::master;
-use crate::model::{Config, TargetRule, TranscriptSession};
+use crate::model::{Config, TargetRule, TranscriptSession, WatchArmDaemonStatus};
 use crate::remediation::{format_target_match, is_auto_fable_target, target_for_session};
 use crate::sessions::discover_recent_sessions;
 use crate::util::{home_dir, human_age, normalize_path, short_session};
@@ -32,6 +33,11 @@ pub(crate) struct DashboardSnapshot {
     /// banner above everything else on the page — this is a safety control,
     /// never ambiguous about which state it's in.
     pub(crate) master_disarmed: bool,
+    /// The OTHER axis: is the watch-arm daemon actually installed and
+    /// scheduled? A cleared flag with a `NotScheduled`/`NotInstalled` daemon
+    /// means nothing will actually run — that combination must be visible on
+    /// the banner, never silent.
+    pub(crate) watch_arm_status: WatchArmDaemonStatus,
 }
 
 pub(crate) struct DashboardSummary {
@@ -107,6 +113,9 @@ pub(crate) fn load_dashboard_snapshot(cli: &Cli) -> Result<DashboardSnapshot> {
     let tabs = load_all_tabs(&workspaces)?;
     let marker = master::marker_path(cli.disarm_marker.clone())?;
     let master_disarmed = master::is_disarmed(&marker);
+    // Read-only status query (`launchctl print`) — never a mutation. This is
+    // the only launchd interaction any GET route performs.
+    let watch_arm_status = watch_arm_daemon_status(&home_dir()?)?;
     Ok(build_dashboard_snapshot(
         generated_at,
         &config,
@@ -115,6 +124,7 @@ pub(crate) fn load_dashboard_snapshot(cli: &Cli) -> Result<DashboardSnapshot> {
         &workspaces,
         &tabs,
         master_disarmed,
+        watch_arm_status,
     ))
 }
 
@@ -127,6 +137,7 @@ pub(crate) fn build_dashboard_snapshot(
     workspaces: &[HerdrWorkspace],
     tabs: &[HerdrTab],
     master_disarmed: bool,
+    watch_arm_status: WatchArmDaemonStatus,
 ) -> DashboardSnapshot {
     let workspaces_by_id = workspaces
         .iter()
@@ -229,6 +240,7 @@ pub(crate) fn build_dashboard_snapshot(
         panes: claude_panes,
         summary,
         master_disarmed,
+        watch_arm_status,
     }
 }
 
@@ -517,6 +529,7 @@ fn render_dashboard_json(snapshot: &DashboardSnapshot) -> String {
     serde_json::to_string_pretty(&json!({
         "generated_at": snapshot.generated_at.to_rfc3339(),
         "master_disarmed": snapshot.master_disarmed,
+        "watch_arm_daemon": snapshot.watch_arm_status.label(),
         "summary": {
             "claude_panes": snapshot.summary.claude_panes,
             "enabled_panes": snapshot.summary.enabled_panes,

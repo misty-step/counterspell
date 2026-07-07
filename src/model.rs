@@ -14,6 +14,32 @@ pub(crate) struct Config {
     pub(crate) debounce_seconds: u64,
 }
 
+/// The OTHER axis of "is counterspell live," independent of the master
+/// switch flag: whether the watch-arm LaunchAgent is actually installed and
+/// scheduled to tick at all. The flag alone can lie by omission — "flag says
+/// enabled" means nothing if the daemon was never (re)loaded. The dashboard
+/// must show both axes so that combination is never silent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WatchArmDaemonStatus {
+    /// No plist on disk — `counterspell install-ui`/`setup` has never run.
+    NotInstalled,
+    /// Plist exists but launchd isn't running it (unloaded and/or
+    /// persistently `launchctl disable`d).
+    NotScheduled,
+    /// Loaded and scheduled: it will actually tick.
+    Scheduled,
+}
+
+impl WatchArmDaemonStatus {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            WatchArmDaemonStatus::NotInstalled => "not installed",
+            WatchArmDaemonStatus::NotScheduled => "not scheduled",
+            WatchArmDaemonStatus::Scheduled => "scheduled",
+        }
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct FileConfig {
     pub(crate) projects_dir: Option<PathBuf>,

@@ -824,6 +824,7 @@ fn dashboard_render_shows_herdr_panes_and_session_toggles() {
             number: Some(19),
         }],
         false,
+        WatchArmDaemonStatus::Scheduled,
     );
 
     let html = render_dashboard_html(&snapshot);
@@ -863,6 +864,7 @@ fn dashboard_render_marks_fable_history_sessions_auto() {
             number: Some(19),
         }],
         false,
+        WatchArmDaemonStatus::Scheduled,
     );
 
     let html = render_dashboard_html(&snapshot);
@@ -870,6 +872,74 @@ fn dashboard_render_marks_fable_history_sessions_auto() {
     assert!(html.contains("Auto"));
     assert!(html.contains("target claude-fable-5"));
     assert!(!html.contains(r#"<button type="submit">Enable</button>"#));
+}
+
+fn empty_dashboard_snapshot(
+    generated_at: DateTime<Utc>,
+    master_disarmed: bool,
+    watch_arm_status: WatchArmDaemonStatus,
+) -> crate::dashboard::DashboardSnapshot {
+    build_dashboard_snapshot(
+        generated_at,
+        &test_config(),
+        &[],
+        &[],
+        &[],
+        &[],
+        master_disarmed,
+        watch_arm_status,
+    )
+}
+
+#[test]
+fn dashboard_banner_warns_when_flag_enabled_but_daemon_not_scheduled() {
+    // The one combination the operator must never be left to discover the
+    // hard way: the flag says go, but nothing is actually loaded to run it.
+    let generated_at = Utc::now();
+    let snapshot =
+        empty_dashboard_snapshot(generated_at, false, WatchArmDaemonStatus::NotScheduled);
+    let html = render_dashboard_html(&snapshot);
+
+    assert!(html.contains("Counterspell: ENABLED"));
+    assert!(html.contains("watch-arm daemon: not scheduled"));
+    assert!(html.contains("class=\"master-mismatch\""));
+    assert!(html.contains("nothing will actually run"));
+}
+
+#[test]
+fn dashboard_banner_warns_when_flag_enabled_but_daemon_not_installed() {
+    let generated_at = Utc::now();
+    let snapshot =
+        empty_dashboard_snapshot(generated_at, false, WatchArmDaemonStatus::NotInstalled);
+    let html = render_dashboard_html(&snapshot);
+
+    assert!(html.contains("Counterspell: ENABLED"));
+    assert!(html.contains("watch-arm daemon: not installed"));
+    assert!(html.contains("class=\"master-mismatch\""));
+}
+
+#[test]
+fn dashboard_banner_has_no_mismatch_warning_when_armed_and_scheduled() {
+    let generated_at = Utc::now();
+    let snapshot = empty_dashboard_snapshot(generated_at, false, WatchArmDaemonStatus::Scheduled);
+    let html = render_dashboard_html(&snapshot);
+
+    assert!(html.contains("Counterspell: ENABLED"));
+    assert!(html.contains("watch-arm daemon: scheduled"));
+    assert!(!html.contains("class=\"master-mismatch\""));
+}
+
+#[test]
+fn dashboard_banner_has_no_mismatch_warning_when_disabled_regardless_of_daemon() {
+    // Disabled is always safe: the flag itself blocks the hot path, so an
+    // unscheduled daemon is not a dangerous combination worth alarming over.
+    let generated_at = Utc::now();
+    let snapshot = empty_dashboard_snapshot(generated_at, true, WatchArmDaemonStatus::NotScheduled);
+    let html = render_dashboard_html(&snapshot);
+
+    assert!(html.contains("Counterspell: DISABLED"));
+    assert!(html.contains("watch-arm daemon: not scheduled"));
+    assert!(!html.contains("class=\"master-mismatch\""));
 }
 
 #[test]

@@ -27,7 +27,7 @@ pub(crate) use herdr::HerdrPane;
 #[cfg(test)]
 pub(crate) use model::{
     Config, FileConfig, GateBlocker, ModelDrift, PlannedAction, SessionState, TargetRule,
-    TranscriptSession, WatchStore,
+    TranscriptSession, WatchArmDaemonStatus, WatchStore,
 };
 #[cfg(test)]
 pub(crate) use rebind::{build_report_request, resolve_target_session};

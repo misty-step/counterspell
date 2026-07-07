@@ -1,4 +1,5 @@
 use crate::dashboard::{ClaudePaneView, ClaudeSessionView, DashboardSnapshot};
+use crate::model::WatchArmDaemonStatus;
 use crate::util::html_escape;
 
 struct WorkspaceGroup<'a> {
@@ -70,7 +71,7 @@ pub(crate) fn render_dashboard_html(snapshot: &DashboardSnapshot) -> String {
 </html>
 "#,
         style(),
-        render_master_banner(snapshot.master_disarmed),
+        render_master_banner(snapshot.master_disarmed, snapshot.watch_arm_status),
         snapshot.summary.claude_panes,
         snapshot.summary.enabled_panes,
         snapshot.summary.enabled_sessions,
@@ -84,31 +85,61 @@ pub(crate) fn render_dashboard_html(snapshot: &DashboardSnapshot) -> String {
 /// The master on/off control: a full-width banner above everything else on
 /// the page, so the operator can never be unsure whether counterspell is
 /// live. Exactly one action is offered — the one that flips current state —
-/// same as the per-session Enable/Disable controls below it.
-fn render_master_banner(disarmed: bool) -> String {
-    if disarmed {
-        r#"<header class="master-bar is-disarmed" aria-label="Counterspell master switch">
-  <div>
-    <strong>Counterspell: DISABLED</strong>
-    <span>Master switch is off. No drift will be remediated, no keystrokes sent.</span>
-  </div>
-  <form method="post" action="/master/enable">
-    <button class="master-toggle" type="submit">Turn ON</button>
-  </form>
-</header>"#
-            .to_string()
+/// same as the per-session Enable/Disable controls below it. This button is
+/// flag-only: it can never load, unload, enable, or disable the watch-arm
+/// LaunchAgent (crate::master::enable_flag_only) — daemon lifecycle is a
+/// deliberate terminal action (`counterspell enable`/`setup`) only.
+///
+/// Shows BOTH axes of "is counterspell live" — the flag, and whether the
+/// daemon is actually installed+scheduled — because either one alone can
+/// mislead: a cleared flag over an unscheduled daemon means nothing is
+/// running no matter what the flag says, and that combination must be
+/// visible here, not silent.
+fn render_master_banner(disarmed: bool, watch_arm_status: WatchArmDaemonStatus) -> String {
+    let (state_class, flag_line) = if disarmed {
+        (
+            "is-disarmed",
+            r#"<strong>Counterspell: DISABLED</strong>
+    <span>Master switch is off. No drift will be remediated, no keystrokes sent.</span>"#,
+        )
     } else {
-        r#"<header class="master-bar is-armed" aria-label="Counterspell master switch">
-  <div>
-    <strong>Counterspell: ENABLED</strong>
-    <span>Master switch is on. Configured drift will be remediated automatically.</span>
-  </div>
-  <form method="post" action="/master/disable">
+        (
+            "is-armed",
+            r#"<strong>Counterspell: ENABLED</strong>
+    <span>Master switch is on. Configured drift will be remediated automatically.</span>"#,
+        )
+    };
+    let toggle = if disarmed {
+        r#"<form method="post" action="/master/enable">
+    <button class="master-toggle" type="submit">Turn ON</button>
+  </form>"#
+    } else {
+        r#"<form method="post" action="/master/disable">
     <button class="master-toggle" type="submit">Turn OFF</button>
-  </form>
+  </form>"#
+    };
+    let daemon_line = format!(
+        r#"<span class="master-daemon">watch-arm daemon: {}</span>"#,
+        html_escape(watch_arm_status.label())
+    );
+    // The one combination that must never be silent: flag says go, but
+    // nothing is actually loaded to act on it.
+    let mismatch = if !disarmed && watch_arm_status != WatchArmDaemonStatus::Scheduled {
+        r#"<p class="master-mismatch">Flag says ENABLED, but the watch-arm daemon is NOT scheduled — nothing will actually run until <code>counterspell enable</code> (or <code>setup</code>) runs at a terminal.</p>"#
+    } else {
+        ""
+    };
+
+    format!(
+        r#"<header class="master-bar {state_class}" aria-label="Counterspell master switch">
+  <div>
+    {flag_line}
+    {daemon_line}
+    {mismatch}
+  </div>
+  {toggle}
 </header>"#
-            .to_string()
-    }
+    )
 }
 
 fn workspace_groups(panes: &[ClaudePaneView]) -> Vec<WorkspaceGroup<'_>> {
@@ -468,18 +499,31 @@ button, a { cursor: pointer; }
   gap: 1.5em;
   flex-wrap: wrap;
 }
+.master-bar > div { display: grid; gap: .35em; }
 .master-bar strong {
   display: block;
   font-size: 1.1em;
   letter-spacing: .03em;
 }
 .master-bar span { font-family: var(--mono); font-size: 13px; }
+.master-daemon { display: block; }
+.master-mismatch {
+  margin: .35em 0 0;
+  padding: .5em .75em;
+  border: 2px solid currentColor;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  max-width: 48rem;
+}
+.master-mismatch code { font-family: inherit; }
 .master-bar.is-armed {
   background: var(--err);
   border-color: var(--err);
   color: #1b0d0a;
 }
 .master-bar.is-armed span { color: #1b0d0a; opacity: .82; }
+.master-bar.is-armed .master-mismatch { opacity: 1; background: rgba(27, 13, 10, .12); }
 .master-bar.is-disarmed {
   background: var(--wash);
   border-color: var(--line);

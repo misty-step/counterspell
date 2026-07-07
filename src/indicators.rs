@@ -6,6 +6,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
+use crate::model::WatchArmDaemonStatus;
 use crate::util::{home_dir, shell_param_default, xml_escape};
 
 pub(crate) const LAUNCH_AGENT_LABEL: &str = "com.misty-step.counterspell.annotate-herdr";
@@ -217,6 +218,23 @@ pub(crate) fn ensure_watch_arm_loaded(home: &Path) -> Result<bool> {
     enable_launch_agent(WATCH_ARM_LAUNCH_AGENT_LABEL)?;
     load_launch_agent(&path, WATCH_ARM_LAUNCH_AGENT_LABEL)?;
     Ok(true)
+}
+
+/// Read-only: is the watch-arm daemon actually installed and scheduled?
+/// Never mutates anything — only `launchctl print`, the same query `doctor`
+/// already uses. This is deliberately the ONLY launchd interaction the
+/// dashboard's GET route performs; nothing here can load, unload, enable,
+/// or disable a service.
+pub(crate) fn watch_arm_daemon_status(home: &Path) -> Result<WatchArmDaemonStatus> {
+    let path = watch_arm_launch_agent_path(home);
+    if !path.exists() {
+        return Ok(WatchArmDaemonStatus::NotInstalled);
+    }
+    if launch_agent_scheduled(WATCH_ARM_LAUNCH_AGENT_LABEL)? {
+        Ok(WatchArmDaemonStatus::Scheduled)
+    } else {
+        Ok(WatchArmDaemonStatus::NotScheduled)
+    }
 }
 
 fn gui_domain() -> Result<String> {
