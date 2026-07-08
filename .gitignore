@@ -1,3 +1,6 @@
 target/
 .evidence/
 .DS_Store
+
+# Tauri regenerates these ACL/capability schemas on every desktop build.
+desktop/gen/schemas/

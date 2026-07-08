@@ -152,22 +152,35 @@ pub(crate) fn describe_target_rule(target: &TargetRule) -> String {
 }
 
 pub(crate) fn load_config(cli: &Cli) -> Result<Config> {
+    resolve_config(
+        cli.config.clone(),
+        cli.projects_dir.clone(),
+        cli.recent_hours,
+    )
+}
+
+/// The Cli-free core of [`load_config`], so non-CLI consumers (the desktop
+/// app's library API) can resolve the same effective `Config` from optional
+/// overrides plus the identical env/config/default precedence, without
+/// synthesizing a fake `Cli`.
+pub(crate) fn resolve_config(
+    config_override: Option<PathBuf>,
+    projects_dir_override: Option<PathBuf>,
+    recent_hours_override: Option<u64>,
+) -> Result<Config> {
     let home = home_dir()?;
     let mut raw = FileConfig::default();
-    let config_path = config_path(cli.config.clone(), &home);
+    let config_path = config_path(config_override, &home);
 
     if config_path.exists() {
         raw = parse_config_file(&config_path)?;
     }
 
-    let projects_dir = cli
-        .projects_dir
-        .clone()
+    let projects_dir = projects_dir_override
         .or_else(|| env::var_os("COUNTERSPELL_PROJECTS_DIR").map(PathBuf::from))
         .or(raw.projects_dir)
         .unwrap_or_else(|| home.join(".claude").join("projects"));
-    let recent_hours = cli
-        .recent_hours
+    let recent_hours = recent_hours_override
         .or_else(|| parse_env_u64("COUNTERSPELL_RECENT_HOURS"))
         .or(raw.recent_hours)
         .unwrap_or(DEFAULT_RECENT_HOURS);

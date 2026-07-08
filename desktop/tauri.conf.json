@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Counterspell",
+  "version": "0.1.0",
+  "identifier": "io.mistystep.counterspell.desktop",
+  "build": {
+    "frontendDist": "frontend"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Counterspell",
+        "width": 560,
+        "height": 700,
+        "minWidth": 460,
+        "minHeight": 540,
+        "resizable": true,
+        "visible": true,
+        "titleBarStyle": "Transparent",
+        "hiddenTitle": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "Keep your Fable sessions on Fable.",
+    "longDescription": "Counterspell watches your Claude Code sessions and returns drifted ones to their target model. This is the persistent control window: verdict, live roster, activation log, and arm/disarm controls."
+  }
+}

@@ -15,7 +15,7 @@ use crate::config::{
 };
 use crate::dashboard;
 use crate::defaults::DEFAULT_TARGET_MODEL;
-use crate::feed::append_feed_events;
+use crate::events::append_activation_events;
 use crate::herdr::{
     annotate_herdr_pane, load_herdr_panes, matching_panes_for_session, pane_id, pane_session_id,
     run_herdr_args, session_reporting_broken,
@@ -753,7 +753,7 @@ fn watch(cli: &Cli, args: &WatchArgs) -> Result<()> {
     if store_changed {
         save_store(&state_path, &store)?;
     }
-    append_feed_events(&feed_events, now)?;
+    append_activation_events(&feed_events, now)?;
     print_watch(&rows);
     Ok(())
 }

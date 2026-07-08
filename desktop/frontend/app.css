@@ -1,0 +1,514 @@
+/*
+ * Rail skin — the counterspell-919 locked design (option 6, "RAIL"). A left nav
+ * rail (wordmark + Roster / Log / Health destinations, verdict + Armed toggle
+ * pinned at the foot) with the active view on the desk to the right. Chrome
+ * never moves; only the desk swaps. Styling rides the vendored aesthetic tokens
+ * (tokens.css).
+ */
+* {
+  box-sizing: border-box;
+}
+
+/* [hidden] must win over component display rules. */
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--ae-surface);
+  color: var(--ae-ink);
+  font-family: var(--ae-font);
+  font-size: var(--ae-size);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+  overflow-x: hidden;
+}
+
+.icon {
+  width: 1.1em;
+  height: 1.1em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  display: block;
+}
+
+/* ── Title bar (drag strip over the transparent native title bar) ──────── */
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: var(--ae-s2);
+  height: 2.4em;
+  padding: 0 var(--ae-s3) 0 var(--ae-s4);
+  border-bottom: 1px solid var(--ae-line);
+  user-select: none;
+  flex: none;
+}
+.tb-spacer {
+  flex: 1;
+}
+.tb-fresh {
+  font-family: var(--ae-font-mono);
+  font-size: 0.72em;
+  color: var(--ae-ink-faint);
+  letter-spacing: 0.02em;
+}
+
+.icon-btn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--ae-ink-muted);
+  cursor: pointer;
+  padding: var(--ae-s1);
+  display: inline-flex;
+  border-radius: var(--ae-radius);
+  transition: color var(--ae-quick) var(--ae-ease);
+}
+.icon-btn:hover {
+  color: var(--ae-ink);
+}
+.icon-btn--sm .icon {
+  width: 0.95em;
+  height: 0.95em;
+}
+
+/* ── Shell: rail + desk ────────────────────────────────────────────────── */
+.shell {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.rail {
+  width: 8.6em;
+  flex: none;
+  border-right: 1px solid var(--ae-line);
+  display: flex;
+  flex-direction: column;
+  padding: var(--ae-s3) var(--ae-s2);
+  gap: 0.15em;
+  background: var(--ae-wash);
+}
+.rl-mark {
+  display: flex;
+  align-items: center;
+  gap: var(--ae-s1);
+  font-size: 0.9em;
+  font-weight: var(--ae-weight-black);
+  letter-spacing: -0.01em;
+  padding: 0.2em 0.3em 0.7em;
+}
+.rl-mark .icon {
+  color: var(--ae-accent);
+  width: 1em;
+  height: 1em;
+  flex: none;
+}
+.rl-item {
+  appearance: none;
+  background: none;
+  border: none;
+  border-left: 2px solid transparent;
+  color: var(--ae-ink-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: var(--ae-s2);
+  font: inherit;
+  font-family: var(--ae-font-mono);
+  font-size: 0.82em;
+  letter-spacing: 0.02em;
+  padding: 0.5em 0.55em;
+  text-align: left;
+  transition: color var(--ae-quick) var(--ae-ease), background var(--ae-quick) var(--ae-ease);
+}
+.rl-item .icon {
+  width: 1em;
+  height: 1em;
+  flex: none;
+}
+.rl-item:hover {
+  color: var(--ae-ink);
+}
+.rl-item--on {
+  color: var(--ae-ink);
+  border-left-color: var(--ae-accent);
+  background: var(--ae-surface);
+}
+
+/* Rail foot: persistent verdict + master switch. */
+.rl-foot {
+  margin-top: auto;
+  padding: var(--ae-s3) 0.3em 0;
+  border-top: 1px solid var(--ae-line);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ae-s2);
+}
+.rl-verdict {
+  display: flex;
+  align-items: center;
+  gap: var(--ae-s1);
+  font-family: var(--ae-font-mono);
+  font-size: 0.78em;
+  letter-spacing: 0.03em;
+  color: var(--ae-ink-muted);
+}
+.rl-verdict__glyph {
+  display: inline-flex;
+  color: var(--ae-ink-faint);
+  flex: none;
+}
+.rl-verdict__glyph .icon {
+  width: 1.15em;
+  height: 1.15em;
+}
+.rl-verdict__label {
+  font-weight: var(--ae-weight-black);
+  color: var(--ae-ink);
+}
+.rl-verdict__sub {
+  margin: 0;
+  font-size: 0.72em;
+  line-height: 1.35;
+  color: var(--ae-ink-muted);
+}
+/* Status rides the glyph, never a filled pill. */
+.rl-verdict--shielded .rl-verdict__glyph {
+  color: var(--ae-ok);
+}
+.rl-verdict--acting .rl-verdict__glyph {
+  color: var(--ae-accent);
+}
+.rl-verdict--drift-blocked .rl-verdict__glyph {
+  color: var(--ae-warn);
+}
+.rl-verdict--disarmed .rl-verdict__glyph {
+  color: var(--ae-ink-faint);
+}
+
+/* ── Master switch ─────────────────────────────────────────────────────── */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ae-s2);
+  cursor: pointer;
+  user-select: none;
+  font-family: var(--ae-font-mono);
+  font-size: 0.7em;
+  letter-spacing: 0.04em;
+  color: var(--ae-ink-muted);
+}
+.switch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.switch__track {
+  width: 2.1em;
+  height: 1.15em;
+  border: 1px solid var(--ae-ink-muted);
+  background: var(--ae-wash);
+  position: relative;
+  flex: none;
+  transition: background var(--ae-quick) var(--ae-ease), border-color var(--ae-quick) var(--ae-ease);
+}
+.switch__thumb {
+  position: absolute;
+  top: 0.1em;
+  left: 0.1em;
+  width: 0.8em;
+  height: 0.8em;
+  background: var(--ae-ink-muted);
+  transition: transform var(--ae-quick) var(--ae-ease), background var(--ae-quick) var(--ae-ease);
+}
+.switch input:checked + .switch__track {
+  background: color-mix(in srgb, var(--ae-accent) 14%, transparent);
+  border-color: var(--ae-accent);
+}
+.switch input:checked + .switch__track .switch__thumb {
+  transform: translateX(0.95em);
+  background: var(--ae-accent);
+}
+.switch input:checked ~ .switch__label {
+  color: var(--ae-accent);
+}
+.switch input:focus-visible + .switch__track {
+  outline: 2px solid var(--ae-accent);
+  outline-offset: 2px;
+}
+
+/* ── Desk (scrolls internally; page never scrolls) ─────────────────────── */
+.desk {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.sec {
+  padding: var(--ae-s3) var(--ae-s4);
+}
+.sec-h {
+  display: flex;
+  align-items: center;
+  gap: var(--ae-s2);
+  font-family: var(--ae-font-mono);
+  font-size: 0.78em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ae-ink-muted);
+  margin-bottom: var(--ae-s3);
+}
+.sec-h .icon {
+  width: 1em;
+  height: 1em;
+  flex: none;
+}
+.sec-h .rt {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--ae-ink-faint);
+  font-size: 0.95em;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ae-s2);
+}
+.sec-h .rt .filter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ae-s1);
+  cursor: pointer;
+  color: var(--ae-ink-muted);
+}
+
+/* ── Roster table ──────────────────────────────────────────────────────── */
+.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--ae-font-mono);
+  font-size: 0.86em;
+}
+.tbl th {
+  text-align: left;
+  font-weight: var(--ae-weight-medium);
+  color: var(--ae-ink-faint);
+  font-size: 0.8em;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.3em 0.5em 0.5em 0;
+  border-bottom: 1px solid var(--ae-line);
+}
+.tbl td {
+  padding: 0.45em 0.5em 0.45em 0;
+  border-bottom: 1px solid var(--ae-line);
+  color: var(--ae-ink);
+  vertical-align: middle;
+}
+.tbl tr:last-child td {
+  border-bottom: none;
+}
+.tbl .repo {
+  font-weight: var(--ae-weight-medium);
+  font-family: var(--ae-font);
+  letter-spacing: -0.01em;
+}
+.tbl .pane {
+  color: var(--ae-ink-muted);
+}
+.tbl .st {
+  color: var(--ae-ink-muted);
+  font-size: 0.92em;
+}
+.tbl .st .drift {
+  color: var(--ae-warn);
+}
+.tbl .st .on-model {
+  color: var(--ae-ok);
+}
+.tbl .act {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.btn {
+  appearance: none;
+  font: inherit;
+  font-size: 0.86em;
+  font-family: var(--ae-font-mono);
+  letter-spacing: 0.03em;
+  border: 1px solid var(--ae-line);
+  background: none;
+  color: var(--ae-ink);
+  padding: 0.3em 0.55em;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ae-s1);
+  transition: border-color var(--ae-quick) var(--ae-ease);
+}
+.btn:hover {
+  border-color: var(--ae-ink);
+}
+.btn .icon {
+  width: 0.9em;
+  height: 0.9em;
+}
+.btn--warn {
+  color: var(--ae-warn);
+  border-color: color-mix(in srgb, var(--ae-warn) 50%, var(--ae-line));
+}
+.btn--sm {
+  font-size: 0.8em;
+}
+
+/* Inline mini toggle used per roster row. */
+.switch--mini {
+  gap: 0;
+}
+.switch--mini .switch__track {
+  width: 1.7em;
+  height: 0.95em;
+}
+.switch--mini .switch__thumb {
+  width: 0.65em;
+  height: 0.65em;
+}
+.switch--mini input:checked + .switch__track .switch__thumb {
+  transform: translateX(0.75em);
+}
+
+/* ── Activation log ────────────────────────────────────────────────────── */
+.log {
+  display: flex;
+  flex-direction: column;
+}
+.lrow {
+  display: flex;
+  gap: var(--ae-s2);
+  padding: 0.5em 0;
+  border-bottom: 1px solid var(--ae-line);
+  font-size: 0.9em;
+}
+.lrow:last-child {
+  border-bottom: none;
+}
+.lrow .lg {
+  flex: none;
+  margin-top: 0.1em;
+}
+.lrow .lg .icon {
+  width: 1em;
+  height: 1em;
+}
+.lrow .lt {
+  font-family: var(--ae-font-mono);
+  font-size: 0.8em;
+  color: var(--ae-ink-muted);
+  flex: none;
+  width: 3.2em;
+  margin-top: 0.15em;
+}
+.lrow .lb {
+  flex: 1;
+  min-width: 0;
+}
+.lrow--confirmed .lg {
+  color: var(--ae-ok);
+}
+.lrow--in-flight .lg {
+  color: var(--ae-accent);
+}
+.lrow--blocked .lg {
+  color: var(--ae-warn);
+}
+.lrow--detected .lg {
+  color: var(--ae-ink-muted);
+}
+.lrow--ignored .lg {
+  color: var(--ae-ink-faint);
+}
+
+/* ── Health (stacked doctor view) ──────────────────────────────────────── */
+.health {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ae-s3);
+}
+.hitem {
+  display: flex;
+  align-items: center;
+  gap: var(--ae-s2);
+  font-size: 0.9em;
+}
+.hitem .icon {
+  width: 1em;
+  height: 1em;
+  flex: none;
+}
+.hitem.ok .icon {
+  color: var(--ae-ok);
+}
+.hitem.bad .icon {
+  color: var(--ae-err);
+}
+.hitem .hl {
+  font-family: var(--ae-font-mono);
+  letter-spacing: 0.03em;
+  color: var(--ae-ink);
+}
+.hitem .hn {
+  color: var(--ae-ink-faint);
+  font-size: 0.85em;
+}
+
+/* ── Banners ───────────────────────────────────────────────────────────── */
+.banner {
+  margin: var(--ae-s3) var(--ae-s4);
+  padding: var(--ae-s3);
+  border: 1px solid var(--ae-line);
+  border-left-width: 3px;
+  font-size: 0.85em;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ae-s3);
+}
+.banner code {
+  font-family: var(--ae-font-mono);
+  font-size: 0.9em;
+}
+.banner--warn {
+  border-left-color: var(--ae-warn);
+}
+.banner--muted {
+  border-left-color: var(--ae-ink-faint);
+  color: var(--ae-ink-muted);
+}
+
+.empty {
+  padding: var(--ae-s6) var(--ae-s4);
+  text-align: center;
+  color: var(--ae-ink-faint);
+  font-size: 0.9em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}
