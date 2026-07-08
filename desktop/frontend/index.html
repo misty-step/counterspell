@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Counterspell</title>
     <!--
-      Interim styling on vendored aesthetic tokens (tokens.css). The full
-      aesthetic skin (aesthetic.css, also vendored here) is adopted in the
-      design-lab pass, counterspell-919. View components are kept clean so the
-      reskin is cheap.
+      Rail skin — the counterspell-919 locked design (option 6, "RAIL"): a left
+      nav rail (wordmark, Roster / Log / Health destinations, persistent verdict
+      + Armed toggle pinned at the bottom) with the active view on the desk to
+      the right. Styling rides the vendored aesthetic tokens (tokens.css).
     -->
     <link rel="stylesheet" href="tokens.css" />
     <link rel="stylesheet" href="app.css" />
@@ -20,16 +20,38 @@
         <path d="m14 7 3 3" /><path d="M5 6v4" /><path d="M19 14v4" />
         <path d="M10 2v2" /><path d="M7 8H3" /><path d="M21 16h-4" /><path d="M11 3H9" />
       </symbol>
-      <symbol id="i-sun" viewBox="0 0 24 24">
-        <circle cx="12" cy="12" r="4" /><path d="M12 2v2" /><path d="M12 20v2" />
-        <path d="m4.93 4.93 1.41 1.41" /><path d="m17.66 17.66 1.41 1.41" />
-        <path d="M2 12h2" /><path d="M20 12h2" /><path d="m6.34 17.66-1.41 1.41" />
-        <path d="m19.07 4.93-1.41 1.41" />
+      <symbol id="i-shield-check" viewBox="0 0 24 24">
+        <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
+        <path d="m9 12 2 2 4-4" />
       </symbol>
-      <symbol id="i-moon" viewBox="0 0 24 24">
-        <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+      <symbol id="i-shield-alert" viewBox="0 0 24 24">
+        <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
+        <path d="M12 8v4" /><path d="M12 16h.01" />
       </symbol>
+      <symbol id="i-shield-off" viewBox="0 0 24 24">
+        <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1" />
+        <path d="M9.4 5.2C10.6 4.6 11.5 4 12 3.6a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1v4" />
+        <path d="m2 2 20 20" />
+      </symbol>
+      <symbol id="i-circle-check" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="10" /><path d="m9 12 2 2 4-4" />
+      </symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24">
+        <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" />
+        <path d="M12 9v4" /><path d="M12 17h.01" />
+      </symbol>
+      <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14" /></symbol>
       <symbol id="i-dot" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6" /></symbol>
+      <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></symbol>
+      <symbol id="i-pulse" viewBox="0 0 24 24">
+        <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
+        <path d="M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27" />
+      </symbol>
+      <symbol id="i-radio" viewBox="0 0 24 24">
+        <path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9" /><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5" />
+        <circle cx="12" cy="12" r="2" /><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5" />
+        <path d="M19.1 4.9C23 8.8 23 15.1 19.1 19" />
+      </symbol>
       <symbol id="i-plug" viewBox="0 0 24 24">
         <path d="M12 22v-5" /><path d="M9 8V2" /><path d="M15 8V2" />
         <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" />
@@ -39,62 +61,67 @@
         <path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
         <path d="M8 16H3v5" />
       </symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="4" /><path d="M12 2v2" /><path d="M12 20v2" />
+        <path d="m4.93 4.93 1.41 1.41" /><path d="m17.66 17.66 1.41 1.41" />
+        <path d="M2 12h2" /><path d="M20 12h2" /><path d="m6.34 17.66-1.41 1.41" />
+        <path d="m19.07 4.93-1.41 1.41" />
+      </symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24">
+        <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+      </symbol>
     </svg>
 
-    <header class="app-bar" data-tauri-drag-region>
-      <span class="mark" aria-hidden="true">
-        <svg class="icon"><use href="#i-wand" /></svg>
-      </span>
-      <span class="wordmark">Counterspell</span>
-      <button id="theme-toggle" class="icon-btn" type="button" title="Toggle light/dark" aria-label="Toggle theme">
+    <!-- Full-width drag strip: hosts the native macOS traffic lights (transparent
+         title bar) and the app-level utilities (freshness, refresh, theme). -->
+    <header class="titlebar" data-tauri-drag-region>
+      <span class="tb-spacer"></span>
+      <span id="freshness" class="tb-fresh">connecting…</span>
+      <button id="refresh" class="icon-btn icon-btn--sm" type="button" title="Refresh now" aria-label="Refresh">
+        <svg class="icon"><use href="#i-refresh" /></svg>
+      </button>
+      <button id="theme-toggle" class="icon-btn icon-btn--sm" type="button" title="Toggle light/dark" aria-label="Toggle theme">
         <svg class="icon"><use href="#i-sun" /></svg>
       </button>
     </header>
 
-    <main>
-      <section id="verdict" class="verdict verdict--loading" aria-live="polite">
-        <span class="verdict__glyph" aria-hidden="true"><svg class="icon"><use href="#i-wand" /></svg></span>
-        <div class="verdict__text">
-          <p class="verdict__label" id="verdict-label">Loading…</p>
-          <p class="verdict__sub" id="verdict-sub">Reading live state</p>
+    <div id="armed-idle-warn" class="banner banner--warn" hidden>
+      Enforcement is armed but the watch-arm daemon is not scheduled — nothing will actually run.
+      Run <code>counterspell enable</code> in a terminal to (re)load it.
+    </div>
+
+    <div class="shell">
+      <nav class="rail" aria-label="Views">
+        <div class="rl-mark">
+          <svg class="icon"><use href="#i-wand" /></svg>
+          <span>Counterspell</span>
         </div>
-        <label class="switch" title="Global arm / disarm">
-          <input type="checkbox" id="master-switch" />
-          <span class="switch__track"><span class="switch__thumb"></span></span>
-          <span class="switch__label" id="master-label">Armed</span>
-        </label>
-      </section>
+        <button class="rl-item rl-item--on" type="button" data-view="roster">
+          <svg class="icon"><use href="#i-radio" /></svg>Roster
+        </button>
+        <button class="rl-item" type="button" data-view="log">
+          <svg class="icon"><use href="#i-activity" /></svg>Log
+        </button>
+        <button class="rl-item" type="button" data-view="health">
+          <svg class="icon"><use href="#i-pulse" /></svg>Health
+        </button>
 
-      <div id="armed-idle-warn" class="banner banner--warn" hidden>
-        Enforcement is armed but the watch-arm daemon is not scheduled — nothing will actually run.
-        Run <code>counterspell enable</code> in a terminal to (re)load it.
-      </div>
-
-      <section id="health" class="health" aria-label="Health"></section>
-
-      <nav class="tabs" role="tablist">
-        <button class="tab tab--active" data-tab="roster" role="tab">Roster</button>
-        <button class="tab" data-tab="activity" role="tab">Activity</button>
-        <label class="filter" id="roster-filter">
-          <input type="checkbox" id="show-all" /> show all
-        </label>
+        <div class="rl-foot">
+          <div id="verdict" class="rl-verdict rl-verdict--loading" aria-live="polite">
+            <span class="rl-verdict__glyph"><svg class="icon"><use href="#i-wand" /></svg></span>
+            <span class="rl-verdict__label" id="verdict-label">Loading…</span>
+          </div>
+          <p class="rl-verdict__sub" id="verdict-sub">Reading live state</p>
+          <label class="switch" title="Global arm / disarm">
+            <input type="checkbox" id="master-switch" />
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+            <span class="switch__label" id="master-label">Armed</span>
+          </label>
+        </div>
       </nav>
 
-      <section id="roster" class="panel" role="tabpanel"></section>
-      <section id="activity" class="panel" role="tabpanel" hidden></section>
-
-      <div id="swiftbar-offer" class="banner banner--muted" hidden>
-        <span>A legacy SwiftBar menu-bar plugin is still installed. The tray icon replaces it.</span>
-        <button id="swiftbar-remove" class="btn btn--sm" type="button">Remove it</button>
-      </div>
-    </main>
-
-    <footer class="status-line">
-      <span id="freshness">connecting…</span>
-      <button id="refresh" class="icon-btn icon-btn--sm" type="button" title="Refresh now" aria-label="Refresh">
-        <svg class="icon"><use href="#i-refresh" /></svg>
-      </button>
-    </footer>
+      <main id="desk" class="desk"></main>
+    </div>
 
     <script src="app.js"></script>
   </body>

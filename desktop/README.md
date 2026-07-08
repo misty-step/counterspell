@@ -56,3 +56,13 @@ components are kept clean so the reskin is a stylesheet swap.
 | Activity log (dark) | Disarmed (light) |
 | --- | --- |
 | ![Activity](docs/window-activity-dark.png) | ![Disarmed](docs/window-disarmed-light.png) |
+
+## Headless UI QA (no desktop contact)
+
+`desktop/frontend/mock-ipc.js` stubs `window.__TAURI__.core.invoke` with fixture
+data so the full UI runs in a plain browser. Inject it before `app.js` in a
+copy of `index.html`, then drive states via query params:
+`?state=disarmed`, `?view=log|health`, `?theme=dark|light`. Screenshot with
+headless Chrome (`--window-size=560,700`). Agents must use this (or
+`screencapture -l <windowid>`) — never click or focus the live app on the
+operator's desktop. Full harness: counterspell-922.
