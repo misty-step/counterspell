@@ -373,9 +373,16 @@
   padding-right: var(--ae-space-4);
   border-right: 1px solid var(--ae-line);
   /* if the nav ever outgrows the viewport, it scrolls within itself rather
-     than pushing the page */
+     than pushing the page — without ever painting a mid-page scrollbar
+     (operator ruling: scrollbars sit flush at the window edge or nowhere;
+     the mobile jump-bar below already does the same) */
   max-height: calc(100dvh - 2 * var(--ae-space-5));
   overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.msk-rail::-webkit-scrollbar {
+  display: none;
 }
 
 .msk-rail-h {
