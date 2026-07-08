@@ -351,6 +351,38 @@
   }
 }
 
+/* ── release notes: benefit-led card stack (locked r2 option 01, counterspell-925) ── */
+
+.msk-relnotes {
+  display: grid;
+  gap: var(--ae-space-6);
+}
+
+.msk-relcard {
+  border: 1px solid var(--ae-line);
+  padding: var(--ae-space-6);
+  display: grid;
+  gap: var(--ae-space-3);
+}
+
+.msk-relcard-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ae-space-3);
+}
+
+.msk-relcard h2 {
+  margin: 0;
+}
+
+.msk-relcard .ae-item {
+  max-width: 42rem;
+}
+
+.msk-gh-link {
+  margin-top: var(--ae-space-2);
+}
+
 /* ── get-started: docs split (sticky contents rail + scrolling body) ──── */
 
 /* Two columns inside the wide stage: a sticky contents rail and the locked
