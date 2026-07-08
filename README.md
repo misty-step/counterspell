@@ -90,15 +90,15 @@ set exactly one selector and one explicit `target_model`:
 
 ```toml
 [[targets]]
-session_id = "db72af91-c78f-4b3f-80be-6dca7c264f75"
+session_id = "0f27c9aa-1111-2222-3333-444455556666"
 target_model = "claude-fable-5"
 
 [[targets]]
-project_pattern = "-Users-phaedrus-Development-adminifi*"
+project_pattern = "-Users-jane-Development-acme*"
 target_model = "claude-fable-5"
 
 [[targets]]
-cwd_pattern = "/Users/phaedrus/Development/adminifi/*"
+cwd_pattern = "/Users/jane/Development/acme/*"
 target_model = "claude-fable-5"
 ```
 
