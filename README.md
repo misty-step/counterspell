@@ -68,7 +68,7 @@ actions without sending text to Herdr or writing debounce state.
 For extra coverage, add a configured target:
 
 ```sh
-counterspell target add --session-id db72af91-c78f-4b3f-80be-6dca7c264f75
+counterspell target add --session-id 0f27c9aa-1111-2222-3333-444455556666
 counterspell target list
 ```
 
