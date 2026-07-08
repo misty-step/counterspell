@@ -77,113 +77,145 @@
       </header>
 
       <main class="ae-stage ae-stage-scroll">
-        <article class="ae-doc msk-page" aria-labelledby="get-started-title">
-          <h1 id="get-started-title">Get started</h1>
-          <p class="ae-lede">
-            Counterspell is one Rust binary and a local config file. Everything
-            below is copied from the shipped README and ARCHITECTURE docs and
-            checked against the CLI's own <code>--help</code> output — run it
-            from a checkout or a release download, not from this page.
-          </p>
+        <div class="msk-split">
+          <nav class="msk-rail" aria-label="On this page">
+            <p class="msk-rail-h">On this page</p>
+            <a href="#gs-install" class="is-current" aria-current="true"
+              ><span class="msk-rn">01</span> Install</a
+            >
+            <a href="#gs-setup"><span class="msk-rn">02</span> Run guided setup</a>
+            <a href="#gs-check"><span class="msk-rn">03</span> Check what it sees</a>
+            <a href="#gs-ui"><span class="msk-rn">04</span> Open the dashboard</a>
+            <a href="#gs-coverage"><span class="msk-rn">05</span> Add extra coverage</a>
+            <a href="#gs-rebind"><span class="msk-rn">06</span> Re-bind a pane</a>
+            <a href="#gs-verify"><span class="msk-rn">07</span> Verify a build works</a>
+            <a href="#gs-readmore"><span class="msk-rn">&rarr;</span> Read more</a>
+          </nav>
 
-          <h2>Install</h2>
-          <p>Download a prebuilt macOS binary from the latest release:</p>
-          <pre><code>curl -LO https://github.com/misty-step/counterspell/releases/latest/download/counterspell-&lt;tag&gt;-aarch64-apple-darwin.tar.gz
+          <article class="ae-doc msk-doc" aria-labelledby="get-started-title">
+            <h1 id="get-started-title">Get started</h1>
+            <p class="ae-lede">
+              Counterspell is one Rust binary and a local config file. Everything
+              below is copied from the shipped README and ARCHITECTURE docs and
+              checked against the CLI's own <code>--help</code> output — run it
+              from a checkout or a release download, not from this page.
+            </p>
+
+            <section id="gs-install" class="msk-step">
+              <h2>1. Install</h2>
+              <p>Download a prebuilt macOS binary from the latest release:</p>
+              <pre><code>curl -LO https://github.com/misty-step/counterspell/releases/latest/download/counterspell-&lt;tag&gt;-aarch64-apple-darwin.tar.gz
 curl -LO https://github.com/misty-step/counterspell/releases/latest/download/counterspell-&lt;tag&gt;-aarch64-apple-darwin.tar.gz.sha256
 shasum -a 256 -c counterspell-&lt;tag&gt;-aarch64-apple-darwin.tar.gz.sha256
 tar xzf counterspell-&lt;tag&gt;-aarch64-apple-darwin.tar.gz
 install counterspell-&lt;tag&gt;-aarch64-apple-darwin/counterspell /usr/local/bin/counterspell</code></pre>
-          <p>
-            Use the <code>x86_64-apple-darwin</code> archive on Intel Macs, or
-            build from source:
-          </p>
-          <pre><code>cargo install --path .</code></pre>
+              <p>
+                Use the <code>x86_64-apple-darwin</code> archive on Intel Macs, or
+                build from source:
+              </p>
+              <pre><code>cargo install --path .</code></pre>
+            </section>
 
-          <h2>Run guided setup</h2>
-          <p>
-            Setup creates the config if needed, installs the SwiftBar plugin,
-            and loads the Herdr annotation and armed-watch LaunchAgents:
-          </p>
-          <pre><code>counterspell setup --install-ui --load-ui</code></pre>
-          <p>
-            The armed watch LaunchAgent runs <code>counterspell watch
-            --arm</code> every 60 seconds from then on. Reach for a manual
-            <code>counterspell watch --arm</code> only when you want to force
-            a pass immediately.
-          </p>
+            <section id="gs-setup" class="msk-step">
+              <h2>2. Run guided setup</h2>
+              <p>
+                Setup creates the config if needed, installs the SwiftBar plugin,
+                and loads the Herdr annotation and armed-watch LaunchAgents:
+              </p>
+              <pre><code>counterspell setup --install-ui --load-ui</code></pre>
+              <p>
+                The armed watch LaunchAgent runs <code>counterspell watch
+                --arm</code> every 60 seconds from then on. Reach for a manual
+                <code>counterspell watch --arm</code> only when you want to force
+                a pass immediately.
+              </p>
+            </section>
 
-          <h2>Check what it sees</h2>
-          <pre><code>counterspell doctor
+            <section id="gs-check" class="msk-step">
+              <h2>3. Check what it sees</h2>
+              <pre><code>counterspell doctor
 counterspell status
 counterspell status --json</code></pre>
-          <p>
-            <code>doctor</code> checks the local install, config, Herdr
-            reachability, and whether the armed-watch LaunchAgent is actually
-            scheduled. <code>status</code> lists recent Claude transcripts,
-            the Herdr panes they map to, and whether each one is watched.
-          </p>
+              <p>
+                <code>doctor</code> checks the local install, config, Herdr
+                reachability, and whether the armed-watch LaunchAgent is actually
+                scheduled. <code>status</code> lists recent Claude transcripts,
+                the Herdr panes they map to, and whether each one is watched.
+              </p>
+            </section>
 
-          <h2>Open the dashboard</h2>
-          <pre><code>counterspell ui</code></pre>
-          <p>
-            Serves a local Herdr column drilldown on
-            <code>127.0.0.1</code> — workspace, pane, session, policy — and
-            opens it by default. Use <code>counterspell ui --no-open</code>
-            to start the server without launching a browser.
-          </p>
+            <section id="gs-ui" class="msk-step">
+              <h2>4. Open the dashboard</h2>
+              <pre><code>counterspell ui</code></pre>
+              <p>
+                Serves a local Herdr column drilldown on
+                <code>127.0.0.1</code> — workspace, pane, session, policy — and
+                opens it by default. Use <code>counterspell ui --no-open</code>
+                to start the server without launching a browser.
+              </p>
+            </section>
 
-          <h2>Add extra coverage</h2>
-          <p>
-            Any session that has ever run <code>claude-fable-5</code> is
-            watched automatically. To watch a session or project that hasn't
-            run Fable yet, add an explicit target:
-          </p>
-          <pre><code>counterspell target add --session-id db72af91-c78f-4b3f-80be-6dca7c264f75
+            <section id="gs-coverage" class="msk-step">
+              <h2>5. Add extra coverage</h2>
+              <p>
+                Any session that has ever run <code>claude-fable-5</code> is
+                watched automatically. To watch a session or project that hasn't
+                run Fable yet, add an explicit target:
+              </p>
+              <pre><code>counterspell target add --session-id db72af91-c78f-4b3f-80be-6dca7c264f75
 counterspell target list</code></pre>
-          <p>
-            <code>target add</code> defaults to <code>claude-fable-5</code>;
-            pass <code>--target-model</code> only when the extra coverage
-            should enforce a different model.
-          </p>
+              <p>
+                <code>target add</code> defaults to <code>claude-fable-5</code>;
+                pass <code>--target-model</code> only when the extra coverage
+                should enforce a different model.
+              </p>
+            </section>
 
-          <h2>Re-bind a pane after restart or clear</h2>
-          <p>
-            Herdr learns a pane's session id from Claude's
-            <code>SessionStart</code> hook. After a restart, resume, or
-            <code>/clear</code>, re-assert the binding without waiting for the
-            next hook fire:
-          </p>
-          <pre><code>counterspell rebind --verify</code></pre>
+            <section id="gs-rebind" class="msk-step">
+              <h2>6. Re-bind a pane after restart or clear</h2>
+              <p>
+                Herdr learns a pane's session id from Claude's
+                <code>SessionStart</code> hook. After a restart, resume, or
+                <code>/clear</code>, re-assert the binding without waiting for the
+                next hook fire:
+              </p>
+              <pre><code>counterspell rebind --verify</code></pre>
+            </section>
 
-          <h2>Verify a build is actually working</h2>
-          <pre><code>cargo fmt -- --check && cargo test && cargo clippy --all-targets -- -D warnings
+            <section id="gs-verify" class="msk-step">
+              <h2>7. Verify a build is actually working</h2>
+              <pre><code>cargo fmt -- --check && cargo test && cargo clippy --all-targets -- -D warnings
 cargo install --path .
 counterspell doctor
 counterspell status
 counterspell status --json
 counterspell watch --arm</code></pre>
+            </section>
 
-          <h2>Read more</h2>
-          <ul>
-            <li>
-              <a href="https://github.com/misty-step/counterspell/blob/main/README.md"
-                >README</a
-              > — install, quickstart, config, and the SwiftBar/xbar indicator
-              setup.
-            </li>
-            <li>
-              <a href="https://github.com/misty-step/counterspell/blob/main/ARCHITECTURE.md"
-                >ARCHITECTURE.md</a
-              > — detection, targeting, gating, the fast path, and current
-              limits.
-            </li>
-            <li>
-              <a href="https://github.com/misty-step/counterspell/blob/main/AGENTS.md"
-                >AGENTS.md</a
-              > — the repo's own gate and pane-binding contract.
-            </li>
-          </ul>
-        </article>
+            <section id="gs-readmore" class="msk-step">
+              <h2>Read more</h2>
+              <ul>
+                <li>
+                  <a href="https://github.com/misty-step/counterspell/blob/main/README.md"
+                    >README</a
+                  > — install, quickstart, config, and the SwiftBar/xbar indicator
+                  setup.
+                </li>
+                <li>
+                  <a href="https://github.com/misty-step/counterspell/blob/main/ARCHITECTURE.md"
+                    >ARCHITECTURE.md</a
+                  > — detection, targeting, gating, the fast path, and current
+                  limits.
+                </li>
+                <li>
+                  <a href="https://github.com/misty-step/counterspell/blob/main/AGENTS.md"
+                    >AGENTS.md</a
+                  > — the repo's own gate and pane-binding contract.
+                </li>
+              </ul>
+            </section>
+          </article>
+        </div>
       </main>
 
       <footer class="ae-bar msk-footer">
@@ -203,5 +235,6 @@ counterspell watch --arm</code></pre>
     <script src="mode.js"></script>
     <script src="theme.js"></script>
     <script src="copy.js"></script>
+    <script src="railspy.js"></script>
   </body>
 </html>

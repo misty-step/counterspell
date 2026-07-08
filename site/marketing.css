@@ -343,3 +343,158 @@
     opacity: 1;
   }
 }
+
+/* ── get-started: docs split (sticky contents rail + scrolling body) ──── */
+
+/* Two columns inside the wide stage: a sticky contents rail and the locked
+   doc. The page (not an inner column) scrolls — .msk-flow already opts the
+   screen out of the kit's fixed-viewport shell — so the rail stays put via
+   position:sticky against the viewport, and railspy.js highlights the active
+   section on scroll. */
+.msk-split {
+  display: grid;
+  grid-template-columns: 14.5rem minmax(0, 1fr);
+  gap: var(--ae-space-4) var(--ae-space-7);
+  align-items: start;
+  width: min(var(--ae-measure-wide), 100%);
+}
+
+.msk-rail {
+  position: sticky;
+  top: var(--ae-space-5);
+  align-self: start;
+  /* grid items default to min-width:auto; without this, the mobile
+     horizontal jump-bar's nowrap link row widens the single column past the
+     viewport instead of scrolling inside its own overflow-x:auto. */
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1em;
+  padding-right: var(--ae-space-4);
+  border-right: 1px solid var(--ae-line);
+  /* if the nav ever outgrows the viewport, it scrolls within itself rather
+     than pushing the page */
+  max-height: calc(100dvh - 2 * var(--ae-space-5));
+  overflow-y: auto;
+}
+
+.msk-rail-h {
+  margin: 0 0 0.7em;
+  font-family: var(--ae-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ae-ink-muted);
+}
+
+.msk-rail a {
+  display: flex;
+  gap: 0.55em;
+  align-items: baseline;
+  padding: 0.32em 0;
+  font-size: 14px;
+  line-height: 1.35;
+  color: var(--ae-ink-muted);
+  text-decoration: none;
+  transition: color var(--ae-quick) var(--ae-ease);
+}
+
+.msk-rail a:hover {
+  color: var(--ae-ink);
+}
+
+.msk-rail .msk-rn {
+  flex: none;
+  min-width: 1.4em;
+  font-family: var(--ae-font-mono);
+  font-size: 11px;
+  color: var(--ae-ink-faint);
+}
+
+.msk-rail a.is-current {
+  color: var(--ae-ink);
+  font-weight: var(--ae-w-medium);
+}
+
+.msk-rail a.is-current .msk-rn {
+  color: var(--ae-accent);
+}
+
+/* the content column: the site's locked .ae-doc type, capped to a reading
+   measure so the extra horizontal room from the rail layout does not stretch
+   the lines. min-width:0 keeps long code lines scrolling inside their own
+   block instead of widening the grid track. */
+.msk-doc {
+  max-width: var(--ae-measure);
+  min-width: 0;
+}
+
+.msk-doc > *,
+.msk-step,
+.msk-step > * {
+  min-width: 0;
+}
+
+/* each step's heading is the first child of its <section>, so the kit's
+   .ae-doc h*:first-child rule zeroes its top margin; restore the rhythm as
+   space between steps instead. */
+.msk-step {
+  scroll-margin-top: var(--ae-space-5);
+}
+
+.msk-step + .msk-step {
+  margin-top: var(--ae-space-7);
+}
+
+/* smooth in-page jumps from the rail (motion-safe only) */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/* phone: the rail has no desktop-viable collapse of its own, so it becomes a
+   sticky horizontal jump-bar above the content — no dead gutter, and the page
+   never scrolls sideways. */
+@media (max-width: 780px) {
+  .msk-split {
+    grid-template-columns: 1fr;
+    gap: var(--ae-space-5);
+  }
+
+  .msk-rail {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    flex-direction: row;
+    gap: var(--ae-space-4);
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: visible;
+    padding: 0.7em 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--ae-line);
+    background: color-mix(in srgb, var(--ae-surface) 90%, transparent);
+    backdrop-filter: blur(6px);
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .msk-rail::-webkit-scrollbar {
+    display: none;
+  }
+
+  .msk-rail-h {
+    display: none;
+  }
+
+  .msk-rail a {
+    flex: none;
+    padding: 0.15em 0;
+    white-space: nowrap;
+  }
+
+  .msk-doc {
+    max-width: 100%;
+  }
+}
