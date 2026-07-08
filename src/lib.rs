@@ -3,7 +3,7 @@ mod config;
 mod dashboard;
 mod dashboard_render;
 mod defaults;
-mod feed;
+mod events;
 mod herdr;
 mod indicators;
 mod master;
@@ -15,6 +15,8 @@ mod sessions;
 mod status;
 mod store;
 mod util;
+
+pub mod api;
 
 pub use cli::{run, run_from_args, Cli};
 

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en" data-theme="">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Counterspell</title>
+    <!--
+      Interim styling on vendored aesthetic tokens (tokens.css). The full
+      aesthetic skin (aesthetic.css, also vendored here) is adopted in the
+      design-lab pass, counterspell-919. View components are kept clean so the
+      reskin is cheap.
+    -->
+    <link rel="stylesheet" href="tokens.css" />
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <svg aria-hidden="true" width="0" height="0" style="position: absolute">
+      <symbol id="i-wand" viewBox="0 0 24 24">
+        <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72" />
+        <path d="m14 7 3 3" /><path d="M5 6v4" /><path d="M19 14v4" />
+        <path d="M10 2v2" /><path d="M7 8H3" /><path d="M21 16h-4" /><path d="M11 3H9" />
+      </symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="4" /><path d="M12 2v2" /><path d="M12 20v2" />
+        <path d="m4.93 4.93 1.41 1.41" /><path d="m17.66 17.66 1.41 1.41" />
+        <path d="M2 12h2" /><path d="M20 12h2" /><path d="m6.34 17.66-1.41 1.41" />
+        <path d="m19.07 4.93-1.41 1.41" />
+      </symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24">
+        <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+      </symbol>
+      <symbol id="i-dot" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6" /></symbol>
+      <symbol id="i-plug" viewBox="0 0 24 24">
+        <path d="M12 22v-5" /><path d="M9 8V2" /><path d="M15 8V2" />
+        <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" />
+      </symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24">
+        <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+        <path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+        <path d="M8 16H3v5" />
+      </symbol>
+    </svg>
+
+    <header class="app-bar" data-tauri-drag-region>
+      <span class="mark" aria-hidden="true">
+        <svg class="icon"><use href="#i-wand" /></svg>
+      </span>
+      <span class="wordmark">Counterspell</span>
+      <button id="theme-toggle" class="icon-btn" type="button" title="Toggle light/dark" aria-label="Toggle theme">
+        <svg class="icon"><use href="#i-sun" /></svg>
+      </button>
+    </header>
+
+    <main>
+      <section id="verdict" class="verdict verdict--loading" aria-live="polite">
+        <span class="verdict__glyph" aria-hidden="true"><svg class="icon"><use href="#i-wand" /></svg></span>
+        <div class="verdict__text">
+          <p class="verdict__label" id="verdict-label">Loading…</p>
+          <p class="verdict__sub" id="verdict-sub">Reading live state</p>
+        </div>
+        <label class="switch" title="Global arm / disarm">
+          <input type="checkbox" id="master-switch" />
+          <span class="switch__track"><span class="switch__thumb"></span></span>
+          <span class="switch__label" id="master-label">Armed</span>
+        </label>
+      </section>
+
+      <div id="armed-idle-warn" class="banner banner--warn" hidden>
+        Enforcement is armed but the watch-arm daemon is not scheduled — nothing will actually run.
+        Run <code>counterspell enable</code> in a terminal to (re)load it.
+      </div>
+
+      <section id="health" class="health" aria-label="Health"></section>
+
+      <nav class="tabs" role="tablist">
+        <button class="tab tab--active" data-tab="roster" role="tab">Roster</button>
+        <button class="tab" data-tab="activity" role="tab">Activity</button>
+        <label class="filter" id="roster-filter">
+          <input type="checkbox" id="show-all" /> show all
+        </label>
+      </nav>
+
+      <section id="roster" class="panel" role="tabpanel"></section>
+      <section id="activity" class="panel" role="tabpanel" hidden></section>
+
+      <div id="swiftbar-offer" class="banner banner--muted" hidden>
+        <span>A legacy SwiftBar menu-bar plugin is still installed. The tray icon replaces it.</span>
+        <button id="swiftbar-remove" class="btn btn--sm" type="button">Remove it</button>
+      </div>
+    </main>
+
+    <footer class="status-line">
+      <span id="freshness">connecting…</span>
+      <button id="refresh" class="icon-btn icon-btn--sm" type="button" title="Refresh now" aria-label="Refresh">
+        <svg class="icon"><use href="#i-refresh" /></svg>
+      </button>
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>

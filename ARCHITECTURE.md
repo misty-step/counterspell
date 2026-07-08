@@ -97,8 +97,8 @@ daemon lifecycle is a separate, deliberately terminal-only concern.
   disabling. The file's contents are a human-readable timestamp only; the gate
   checks presence, never contents.
 - While the marker exists, `counterspell watch --arm` is **demoted to a
-  detection-only dry-run**: it still detects and logs drift to the bridge feed
-  (a paused window is never dark), but never plans a remediation into
+  detection-only dry-run**: it still detects and logs drift to the activation
+  stream (a paused window is never dark), but never plans a remediation into
   keystrokes. The gate is the single `if arm` guard around `execute_remediation`
   in `watch_rows`; disabling forces `arm` false for the whole pass.
 
@@ -167,6 +167,39 @@ back to the target model, Counterspell asks Claude to preserve the current goal,
 repo/session state, exact next action, and risks in a factual compact handoff.
 This reduces context-loss damage from a model switch and avoids asking the model
 to infer a hidden policy from clever wording.
+
+## Activation Stream
+
+Session-routing telemetry (drift detected, compact queued, model switched,
+remediation confirmed, ignored) is written as JSONL to Counterspell's own
+dedicated stream at `~/.counterspell/events.jsonl` (overridable with
+`COUNTERSPELL_EVENTS_PATH`), size-rotated to `events.jsonl.1`. It is
+deliberately NOT written to the shared fleet feed dir (`~/.factory-lanes/feed`)
+— high-frequency internal telemetry there polluted the fleet event feed and
+made every consumer pay the parse cost (counterspell-910). The desktop app
+tails this stream for its activation log; `api::activation_log` reads it back
+and formats each entry in plain, outcome-stamped words.
+
+## Desktop App
+
+`desktop/` is a Tauri v2 app — a persistent, branded control window plus a
+native tray icon that supersedes the SwiftBar plugin (counterspell-906). Its
+Rust backend consumes the `counterspell` crate as a library through the public
+`counterspell::api` surface (`status_snapshot`, `activation_log`, `set_master`,
+`set_session_enabled`, `rebind_pane`, health). The webview frontend is plain
+HTML/CSS/JS on vendored `aesthetic` tokens.
+
+The app is an **observer + controller only**. It writes exactly the two stable
+control surfaces this document defines — the global disarm marker (flag-only,
+`api::set_master`) and per-session config targets (`api::set_session_enabled`)
+— and it re-asserts a pane's Herdr binding via the same
+`pane.report_agent_session` path `rebind` uses (`api::rebind_pane`, the
+first-class remote rebind for counterspell-917). It NEVER invokes `launchctl`
+or loads/unloads daemons: closing the window (or quitting the app) leaves the
+headless `watch --arm` daemon enforcing, which is the whole point. The single
+protection verdict — SHIELDED / ACTING / DRIFT-BLOCKED(reason) / DISARMED — is
+derived from the live roster and the master-switch state, gated on live panes
+so a session that drifted and then closed is history, not a current alarm.
 
 ## UI And Indicators
 

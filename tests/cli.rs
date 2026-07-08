@@ -1441,13 +1441,13 @@ target_model = "claude-fable-5"
 }
 
 #[test]
-fn watch_appends_bridge_feed_events_for_drift_remediation_and_born_on_opus() {
+fn watch_appends_activation_events_to_dedicated_stream_for_drift_remediation_and_born_on_opus() {
     let temp = tempfile::tempdir().expect("tempdir");
     let projects = temp.path().join("projects");
     let drift_cwd = temp.path().join("drift-repo");
     let opus_cwd = temp.path().join("opus-repo");
     let state = temp.path().join("counterspell-state.json");
-    let feed_dir = temp.path().join("feed");
+    let events_path = temp.path().join("events.jsonl");
     fs::create_dir_all(&drift_cwd).expect("drift cwd");
     fs::create_dir_all(&opus_cwd).expect("opus cwd");
     write_transcript_with_models(
@@ -1486,35 +1486,35 @@ fn watch_appends_bridge_feed_events_for_drift_remediation_and_born_on_opus() {
         .arg("watch")
         .arg("--arm")
         .env("HOME", temp.path())
-        .env("COUNTERSPELL_FEED_DIR", &feed_dir)
+        .env("COUNTERSPELL_EVENTS_PATH", &events_path)
         .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
         .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
         .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
         .assert()
         .success();
 
-    let feed_file = fs::read_dir(&feed_dir)
-        .expect("feed dir")
-        .next()
-        .expect("feed file")
-        .expect("feed entry")
-        .path();
-    let feed = fs::read_to_string(feed_file).expect("feed");
-    assert!(feed.contains(r#""schema_version":"weave.remote_event.v1""#));
-    assert!(feed.contains(r#""action":"model_drift_detected""#));
-    assert!(feed.contains(r#""action":"compact_sent""#));
-    assert!(feed.contains(r#""action":"model_switched""#));
-    assert!(feed.contains(r#""action":"remediation_confirmed""#));
-    assert!(feed.contains(r#""action":"session_ignored""#));
-    assert!(feed.contains(r#""origin":"downgraded-from-fable""#));
-    assert!(feed.contains(r#""origin":"born-on-opus""#));
-    assert!(feed.contains(r#""session_id":"drift-session""#));
-    assert!(feed.contains(r#""pane":"w13:p1""#));
-    assert!(feed.contains(r#""from_model":"claude-fable-5""#));
-    assert!(feed.contains(r#""to_model":"claude-opus-4-8""#));
-    assert!(!feed.contains(drift_cwd.to_string_lossy().as_ref()));
-    assert!(!feed.contains(opus_cwd.to_string_lossy().as_ref()));
-    assert!(!feed.contains("message"));
+    // counterspell-910: telemetry lands in Counterspell's OWN dedicated
+    // stream, never the shared fleet feed dir.
+    let events = fs::read_to_string(&events_path).expect("events stream");
+    assert!(
+        !temp.path().join("feed").exists(),
+        "must not write a feed dir"
+    );
+    assert!(!events.contains("weave.remote_event.v1"));
+    assert!(events.contains(r#""action":"model_drift_detected""#));
+    assert!(events.contains(r#""action":"compact_sent""#));
+    assert!(events.contains(r#""action":"model_switched""#));
+    assert!(events.contains(r#""action":"remediation_confirmed""#));
+    assert!(events.contains(r#""action":"session_ignored""#));
+    assert!(events.contains(r#""origin":"downgraded-from-fable""#));
+    assert!(events.contains(r#""origin":"born-on-opus""#));
+    assert!(events.contains(r#""session_id":"drift-session""#));
+    assert!(events.contains(r#""pane":"w13:p1""#));
+    assert!(events.contains(r#""from_model":"claude-fable-5""#));
+    assert!(events.contains(r#""to_model":"claude-opus-4-8""#));
+    assert!(!events.contains(drift_cwd.to_string_lossy().as_ref()));
+    assert!(!events.contains(opus_cwd.to_string_lossy().as_ref()));
+    assert!(!events.contains("message"));
 }
 
 #[test]

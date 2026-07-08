@@ -1,0 +1,437 @@
+/*
+ * Interim app skin on vendored aesthetic tokens. Compact, single-viewport,
+ * status-rides-the-glyph. The design-lab pass (counterspell-919) adopts the
+ * full aesthetic recipes; these view components are structured so that reskin
+ * is a stylesheet swap, not a rewrite.
+ */
+* {
+  box-sizing: border-box;
+}
+
+/* The [hidden] attribute must win over component display rules
+   (.banner/.panel set display, which would otherwise override the UA rule). */
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--ae-surface);
+  color: var(--ae-ink);
+  font-family: var(--ae-font);
+  font-size: var(--ae-size);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+  overflow-x: hidden;
+}
+
+main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+}
+
+.icon {
+  width: 1.1em;
+  height: 1.1em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  display: block;
+}
+
+/* ── App bar ─────────────────────────────────────────── */
+.app-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--ae-s2);
+  padding: var(--ae-s2) var(--ae-s4);
+  padding-top: 1.75em; /* clear the macOS traffic lights */
+  border-bottom: 1px solid var(--ae-line);
+  user-select: none;
+}
+.app-bar .mark {
+  color: var(--ae-accent);
+  display: inline-flex;
+}
+.wordmark {
+  font-weight: var(--ae-weight-black);
+  letter-spacing: -0.01em;
+  flex: 1;
+}
+
+.icon-btn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--ae-ink-muted);
+  cursor: pointer;
+  padding: var(--ae-s1);
+  display: inline-flex;
+  border-radius: var(--ae-radius);
+  transition: color var(--ae-quick) var(--ae-ease);
+}
+.icon-btn:hover {
+  color: var(--ae-ink);
+}
+.icon-btn--sm .icon {
+  width: 0.95em;
+  height: 0.95em;
+}
+
+/* ── Verdict ─────────────────────────────────────────── */
+.verdict {
+  display: flex;
+  align-items: center;
+  gap: var(--ae-s3);
+  padding: var(--ae-s4);
+  border-bottom: 1px solid var(--ae-line);
+}
+.verdict__glyph {
+  display: inline-flex;
+  color: var(--ae-ink-faint);
+  flex-shrink: 0;
+}
+.verdict__glyph .icon {
+  width: 1.9em;
+  height: 1.9em;
+}
+.verdict__text {
+  flex: 1;
+  min-width: 0;
+}
+.verdict__label {
+  margin: 0;
+  font-weight: var(--ae-weight-black);
+  font-size: 1.15em;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.verdict__sub {
+  margin: 0.15em 0 0;
+  color: var(--ae-ink-muted);
+  font-size: 0.88em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Status rides the glyph, never a filled pill. */
+.verdict--shielded .verdict__glyph {
+  color: var(--ae-ok);
+}
+.verdict--acting .verdict__glyph {
+  color: var(--ae-accent);
+}
+.verdict--drift-blocked .verdict__glyph {
+  color: var(--ae-err);
+}
+.verdict--disarmed .verdict__glyph {
+  color: var(--ae-ink-faint);
+}
+
+/* ── Master switch ───────────────────────────────────── */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ae-s2);
+  cursor: pointer;
+  flex-shrink: 0;
+  user-select: none;
+  font-size: 0.8em;
+  color: var(--ae-ink-muted);
+}
+.switch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.switch__track {
+  width: 2.4em;
+  height: 1.3em;
+  border: 1px solid var(--ae-line);
+  background: var(--ae-wash);
+  border-radius: 1em;
+  position: relative;
+  transition: background var(--ae-quick) var(--ae-ease), border-color var(--ae-quick) var(--ae-ease);
+}
+.switch__thumb {
+  position: absolute;
+  top: 0.15em;
+  left: 0.15em;
+  width: 0.9em;
+  height: 0.9em;
+  border-radius: 50%;
+  background: var(--ae-ink-muted);
+  transition: transform var(--ae-quick) var(--ae-ease), background var(--ae-quick) var(--ae-ease);
+}
+.switch input:checked + .switch__track {
+  background: color-mix(in srgb, var(--ae-accent) 22%, var(--ae-wash));
+  border-color: var(--ae-accent);
+}
+.switch input:checked + .switch__track .switch__thumb {
+  transform: translateX(1.1em);
+  background: var(--ae-accent);
+}
+.switch input:focus-visible + .switch__track {
+  outline: 2px solid var(--ae-accent);
+  outline-offset: 2px;
+}
+
+/* ── Health strip ────────────────────────────────────── */
+.health {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ae-s2) var(--ae-s4);
+  padding: var(--ae-s3) var(--ae-s4);
+  border-bottom: 1px solid var(--ae-line);
+  font-size: 0.82em;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ae-s1);
+  color: var(--ae-ink-muted);
+}
+.chip .icon {
+  width: 0.85em;
+  height: 0.85em;
+}
+.chip--ok .icon {
+  color: var(--ae-ok);
+}
+.chip--warn .icon {
+  color: var(--ae-warn);
+}
+.chip--err .icon {
+  color: var(--ae-err);
+}
+.chip b {
+  color: var(--ae-ink);
+  font-weight: var(--ae-weight-medium);
+}
+
+/* ── Tabs ────────────────────────────────────────────── */
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--ae-s3);
+  padding: 0 var(--ae-s4);
+  border-bottom: 1px solid var(--ae-line);
+}
+.tab {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--ae-ink-muted);
+  cursor: pointer;
+  padding: var(--ae-s3) 0;
+  font: inherit;
+  font-size: 0.9em;
+  font-weight: var(--ae-weight-medium);
+  margin-bottom: -1px;
+}
+.tab--active {
+  color: var(--ae-ink);
+  border-bottom-color: var(--ae-accent);
+}
+.filter {
+  margin-left: auto;
+  font-size: 0.8em;
+  color: var(--ae-ink-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ae-s1);
+  cursor: pointer;
+}
+
+/* ── Panels (scroll internally; page never scrolls) ──── */
+.panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--ae-s2) 0;
+}
+
+/* ── Roster rows ─────────────────────────────────────── */
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--ae-s3);
+  padding: var(--ae-s3) var(--ae-s4);
+  border-bottom: 1px solid var(--ae-line);
+}
+.row__main {
+  flex: 1;
+  min-width: 0;
+}
+.row__title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ae-s2);
+  min-width: 0;
+}
+.row__project {
+  font-weight: var(--ae-weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.row__pane {
+  font-family: var(--ae-font-mono);
+  font-size: 0.82em;
+  color: var(--ae-ink-muted);
+  flex-shrink: 0;
+}
+.row__meta {
+  margin-top: 0.15em;
+  font-size: 0.82em;
+  color: var(--ae-ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row__meta .drift {
+  color: var(--ae-err);
+  font-weight: var(--ae-weight-medium);
+}
+.row__meta .on-model {
+  color: var(--ae-ok);
+}
+.row__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--ae-s2);
+  flex-shrink: 0;
+}
+
+.btn {
+  appearance: none;
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--ae-line);
+  background: var(--ae-wash);
+  color: var(--ae-ink);
+  padding: var(--ae-s1) var(--ae-s2);
+  border-radius: var(--ae-radius);
+  transition: border-color var(--ae-quick) var(--ae-ease);
+}
+.btn:hover {
+  border-color: var(--ae-accent);
+}
+.btn--sm {
+  font-size: 0.78em;
+}
+.btn--primary {
+  background: var(--ae-accent);
+  border-color: var(--ae-accent);
+  color: #fff;
+}
+
+/* ── Activity log ────────────────────────────────────── */
+.log-entry {
+  display: flex;
+  gap: var(--ae-s3);
+  padding: var(--ae-s2) var(--ae-s4);
+  border-bottom: 1px solid var(--ae-line);
+  font-size: 0.88em;
+}
+.log-entry__dot {
+  margin-top: 0.35em;
+  flex-shrink: 0;
+}
+.log-entry__dot .icon {
+  width: 0.55em;
+  height: 0.55em;
+  fill: currentColor;
+  stroke: none;
+}
+.log-entry--confirmed .log-entry__dot {
+  color: var(--ae-ok);
+}
+.log-entry--in-flight .log-entry__dot {
+  color: var(--ae-accent);
+}
+.log-entry--blocked .log-entry__dot {
+  color: var(--ae-err);
+}
+.log-entry--detected .log-entry__dot {
+  color: var(--ae-ink-muted);
+}
+.log-entry--ignored .log-entry__dot {
+  color: var(--ae-ink-faint);
+}
+.log-entry__body {
+  flex: 1;
+  min-width: 0;
+}
+.log-entry__at {
+  color: var(--ae-ink-faint);
+  font-size: 0.85em;
+  flex-shrink: 0;
+}
+
+.empty {
+  padding: var(--ae-s6) var(--ae-s4);
+  text-align: center;
+  color: var(--ae-ink-faint);
+  font-size: 0.9em;
+}
+
+/* ── Banners ─────────────────────────────────────────── */
+.banner {
+  margin: var(--ae-s3) var(--ae-s4);
+  padding: var(--ae-s3);
+  border: 1px solid var(--ae-line);
+  border-left-width: 3px;
+  font-size: 0.85em;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ae-s3);
+}
+.banner code {
+  font-family: var(--ae-font-mono);
+  font-size: 0.9em;
+}
+.banner--warn {
+  border-left-color: var(--ae-warn);
+}
+.banner--muted {
+  border-left-color: var(--ae-ink-faint);
+  color: var(--ae-ink-muted);
+}
+
+/* ── Status line ─────────────────────────────────────── */
+.status-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--ae-s2) var(--ae-s4);
+  border-top: 1px solid var(--ae-line);
+  color: var(--ae-ink-faint);
+  font-size: 0.78em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}

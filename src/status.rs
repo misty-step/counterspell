@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 
-use crate::feed::FeedEvent;
+use crate::events::FeedEvent;
 use crate::herdr::{matching_panes_for_session, pane_id, HerdrPane};
 use crate::model::{Config, SessionState, StatusRow, TranscriptSession, WatchRow, WatchStore};
 use crate::remediation::{

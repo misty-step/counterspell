@@ -1,0 +1,78 @@
+/*
+ * Vendored from misty-step/aesthetic tokens.json v2.24.0 (ultramarine).
+ * Interim token layer for Counterspell Desktop. The full aesthetic skin lands
+ * in the design-lab pass (counterspell-919); keeping styling on these tokens
+ * is what makes the reskin cheap.
+ */
+:root {
+  --ae-surface: #fcfcfc;
+  --ae-wash: #f3f3f3;
+  --ae-ink: #151515;
+  --ae-ink-muted: #737373;
+  --ae-ink-faint: #a3a3a3;
+  --ae-line: #e9e9e9;
+  --ae-accent: #2643d0;
+  --ae-ok: #15714b;
+  --ae-warn: #8a5f32;
+  --ae-err: #a84138;
+
+  --ae-font: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --ae-font-mono: "Geist Mono", ui-monospace, "SF Mono", "Menlo", monospace;
+  --ae-size: 14px;
+  --ae-weight-regular: 400;
+  --ae-weight-medium: 550;
+  --ae-weight-black: 800;
+
+  --ae-ease: cubic-bezier(0.23, 1, 0.32, 1);
+  --ae-quick: 160ms;
+  --ae-soft: 240ms;
+
+  --ae-s1: 0.25em;
+  --ae-s2: 0.5em;
+  --ae-s3: 0.75em;
+  --ae-s4: 1em;
+  --ae-s5: 1.5em;
+  --ae-s6: 2em;
+  --ae-radius: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ae-surface: #121212;
+    --ae-wash: #1b1b1b;
+    --ae-ink: #ededed;
+    --ae-ink-muted: #8f8f8f;
+    --ae-ink-faint: #5c5c5c;
+    --ae-line: #262626;
+    --ae-accent: #8c9eff;
+    --ae-ok: #6fd2a8;
+    --ae-warn: #c49d72;
+    --ae-err: #e58379;
+  }
+}
+
+/* The viewer's explicit toggle wins in both directions. */
+:root[data-theme="light"] {
+  --ae-surface: #fcfcfc;
+  --ae-wash: #f3f3f3;
+  --ae-ink: #151515;
+  --ae-ink-muted: #737373;
+  --ae-ink-faint: #a3a3a3;
+  --ae-line: #e9e9e9;
+  --ae-accent: #2643d0;
+  --ae-ok: #15714b;
+  --ae-warn: #8a5f32;
+  --ae-err: #a84138;
+}
+:root[data-theme="dark"] {
+  --ae-surface: #121212;
+  --ae-wash: #1b1b1b;
+  --ae-ink: #ededed;
+  --ae-ink-muted: #8f8f8f;
+  --ae-ink-faint: #5c5c5c;
+  --ae-line: #262626;
+  --ae-accent: #8c9eff;
+  --ae-ok: #6fd2a8;
+  --ae-warn: #c49d72;
+  --ae-err: #e58379;
+}
