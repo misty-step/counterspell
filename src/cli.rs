@@ -666,18 +666,23 @@ fn install_ui(args: &InstallUiArgs) -> Result<()> {
 }
 
 fn watch(cli: &Cli, args: &WatchArgs) -> Result<()> {
-    // Safety-critical gate: the master switch is checked before anything
-    // else on the acting path — before config, sessions, or Herdr panes are
-    // even loaded — so a disabled switch can never plan or execute
-    // remediation, no matter what `[[targets]]` says. Bare `watch` (no
-    // `--arm`) is dry-run/status-reporting only and is never gated here.
-    if args.arm {
+    // Master switch: when the global flag is off, `watch --arm` is demoted to
+    // the same detection-only dry-run a bare `watch` performs — drift is still
+    // detected and logged to the feed, so a paused window is never dark, but
+    // `arm` is forced false so no plan is ever executed into keystrokes (the
+    // gate is the `if arm` guard around `execute_remediation` in `watch_rows`).
+    // Absence of the marker means ENABLED (the pre-master-switch default), so
+    // existing installs keep enforcing until someone opts into disabling.
+    let disarmed = args.arm && {
         let marker = master::marker_path(cli.disarm_marker.clone())?;
-        if master::is_disarmed(&marker) {
-            println!("counterspell is DISABLED (master switch off); taking no action");
-            return Ok(());
-        }
+        master::is_disarmed(&marker)
+    };
+    if disarmed {
+        println!(
+            "counterspell is DISABLED (master switch off); detecting drift as a dry-run, taking no action"
+        );
     }
+    let arm = args.arm && !disarmed;
 
     let config = load_config(cli)?;
     let now = Utc::now();
@@ -742,7 +747,7 @@ fn watch(cli: &Cli, args: &WatchArgs) -> Result<()> {
         &mut store,
         &config,
         now,
-        args.arm,
+        arm,
         Some(&state_path),
     )?;
     if store_changed {

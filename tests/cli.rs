@@ -1900,10 +1900,13 @@ fn rebind_verify_confirms_pane_now_reports_the_session() {
 fn watch_arm_takes_no_action_when_master_switch_disabled() {
     // Safety-critical: same drifted-session fixture as
     // `watch_reports_compact_then_switch_when_drift_is_gated` (which proves
-    // the armed path DOES remediate), but with the master switch off. Proves
-    // the gate is airtight: not just "no keystrokes sent" but "Herdr was
-    // never even queried" and "session state was never touched" — the
-    // disabled path must exit before planning anything.
+    // the armed path DOES remediate), but with the master switch off. The
+    // master switch demotes `watch --arm` to a detection-only dry-run: drift
+    // is still detected and reported (a paused window must not go dark in the
+    // feed), but ZERO keystrokes are ever injected into a pane. This proves
+    // the remediation gate is airtight — the plan is shown as `dry-run:` and
+    // Herdr is only ever queried read-only (`pane list`), never `pane run` or
+    // `pane send-keys`.
     let temp = tempfile::tempdir().expect("tempdir");
     let projects = temp.path().join("projects");
     let cwd = temp.path().join("repo");
@@ -1954,18 +1957,30 @@ target_model = "claude-fable-5"
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "counterspell is DISABLED (master switch off); taking no action",
+            "counterspell is DISABLED (master switch off); detecting drift as a dry-run, taking no action",
         ))
-        .stdout(predicate::str::contains("compact then switch").not())
-        .stdout(predicate::str::contains("watch pass").not());
+        // Detection still runs and the would-be remediation is reported, but
+        // only ever as a dry-run — never as an executed action.
+        .stdout(predicate::str::contains("watch pass"))
+        .stdout(predicate::str::contains(
+            "dry-run:compact then switch:claude-fable-5",
+        ));
 
+    // Herdr is queried read-only for detection, but no keystrokes are ever
+    // injected: no `pane run` (compact/switch commands) and no `pane
+    // send-keys` (escape/enter) may appear in the log.
+    let herdr_calls = fs::read_to_string(&herdr_log).unwrap_or_default();
     assert!(
-        !herdr_log.exists(),
-        "disabled watch --arm must never even query Herdr panes, let alone send keystrokes"
+        herdr_calls.contains("pane list"),
+        "disabled watch --arm still runs read-only detection, got: {herdr_calls:?}"
     );
     assert!(
-        !state.exists(),
-        "disabled watch --arm must never touch session state"
+        !herdr_calls.contains("pane run"),
+        "disabled watch --arm must never run a command in a pane, got: {herdr_calls:?}"
+    );
+    assert!(
+        !herdr_calls.contains("send-keys"),
+        "disabled watch --arm must never send keystrokes to a pane, got: {herdr_calls:?}"
     );
 }
 
