@@ -209,6 +209,13 @@
   }
 }
 
+/* brand: the wordmark link never underlines (kit global a{underline} would
+   otherwise paint under the header logo); canonical kit fix rides aesthetic-976 */
+.ae-logo,
+.ae-logo:hover {
+  text-decoration: none;
+}
+
 /* ── all-page atmosphere: the hero image, far quieter, fixed behind ───── */
 
 /* Painted at z-index:-1 so it sits above the opaque page surface (the
@@ -225,18 +232,18 @@
   background-image: var(--msk-hero-image);
   background-size: cover;
   background-position: center;
-  opacity: 0.09;
+  opacity: 0.14;
   pointer-events: none;
 }
 
 :root.dark .msk-page-bg,
 :root[data-ae-mode='dark'] .msk-page-bg {
-  opacity: 0.13;
+  opacity: 0.19;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not(.light):not([data-ae-mode='light']) .msk-page-bg {
-    opacity: 0.13;
+    opacity: 0.19;
   }
 }
 

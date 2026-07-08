@@ -112,7 +112,7 @@ body {
   padding: 0.2em 0.3em 0.7em;
 }
 .rl-mark .icon {
-  color: var(--ae-accent);
+  color: var(--ae-ink);
   width: 1em;
   height: 1em;
   flex: none;
