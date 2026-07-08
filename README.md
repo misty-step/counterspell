@@ -62,8 +62,8 @@ non-Fable sessions stay inactive unless you add a configured target.
 counterspell watch --arm
 ```
 
-Plain `counterspell watch` is a dry-run. It reports eligible compact/switch
-actions without sending text to Herdr or writing debounce state.
+Plain `counterspell watch` is a dry-run. It reports the next eligible
+remediation-chain action without sending text to Herdr or writing chain state.
 
 For extra coverage, add a configured target:
 
@@ -175,14 +175,17 @@ transcripts, runs `herdr pane list`, maps sessions to panes by cwd, and shows
 mapped sessions, unmapped sessions, and live Claude panes without a recent
 transcript.
 
-The armed remediation path is scoped to Herdr terminal panes. `watch --arm`
-sends a plain `/compact ...` handoff, waits for the pane to become idle, then
-sends `/model <target_model>`. No tmux backend is included yet; that is a filed
-follow-up. Deliberate Sonnet/Opus sessions remain untouched unless they have
-previously run Fable or are explicitly targeted in config.
+The armed remediation path is scoped to Herdr terminal panes. On drift,
+`watch --arm` interrupts a working session-bound pane immediately, sends a
+plain `/compact ...` handoff, waits for transcript evidence of the compact
+summary, then sends `/model <target_model>` followed by `continue`. The chain
+is tracked in state so repeated armed passes do not double-compact. No tmux
+backend is included yet; that is a filed follow-up. Deliberate Sonnet/Opus
+sessions remain untouched unless they have previously run Fable or are
+explicitly targeted in config.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for detection vs arming, gating, and the
-compact-then-switch sequence.
+interrupt/compact/switch/continue chain.
 
 ## Verification
 

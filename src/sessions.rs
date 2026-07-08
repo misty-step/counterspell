@@ -79,6 +79,7 @@ pub(crate) fn parse_transcript_file(
     let mut last_event_at = None;
     let mut latest_model = None;
     let mut latest_model_at = None;
+    let mut latest_compact_at = None;
     let mut model_history = Vec::new();
 
     for line in reader.lines() {
@@ -106,6 +107,9 @@ pub(crate) fn parse_transcript_file(
             latest_model_at = event_at.or(last_event_at);
             latest_model = Some(model);
         }
+        if is_compact_summary(&value) {
+            latest_compact_at = event_at.or(last_event_at);
+        }
     }
 
     Ok(TranscriptSession {
@@ -115,6 +119,7 @@ pub(crate) fn parse_transcript_file(
         last_event_at: last_event_at.unwrap_or(file_modified_at),
         latest_model,
         latest_model_at,
+        latest_compact_at,
         model_history,
     })
 }
@@ -132,4 +137,17 @@ fn transcript_model(value: &Value) -> Option<String> {
 pub(crate) fn is_model_sentinel(model: &str) -> bool {
     let model = model.trim();
     model.len() >= 2 && model.starts_with('<') && model.ends_with('>')
+}
+
+fn is_compact_summary(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("summary")
+        || value.get("subtype").and_then(Value::as_str) == Some("compact_boundary")
+        || value.get("summary").is_some()
+        || value.get("compactMetadata").is_some()
+        || value
+            .get("isCompactSummary")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        || value.pointer("/message/type").and_then(Value::as_str) == Some("summary")
+        || value.pointer("/message/summary").is_some()
 }

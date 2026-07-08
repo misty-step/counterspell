@@ -632,7 +632,7 @@ fn status_fails_when_herdr_mapping_fails_for_existing_sessions() {
 }
 
 #[test]
-fn watch_reports_compact_then_switch_when_drift_is_gated() {
+fn watch_reports_compact_when_drift_is_gated() {
     let temp = tempfile::tempdir().expect("tempdir");
     let projects = temp.path().join("projects");
     let cwd = temp.path().join("repo");
@@ -678,9 +678,7 @@ target_model = "claude-fable-5"
         .success()
         .stdout(predicate::str::contains("watch pass"))
         .stdout(predicate::str::contains("auto:fable"))
-        .stdout(predicate::str::contains(
-            "compact then switch:claude-fable-5",
-        ));
+        .stdout(predicate::str::contains("compact"));
 }
 
 #[test]
@@ -791,7 +789,7 @@ target_model = "claude-fable-5"
 }
 
 #[test]
-fn watch_fast_path_interrupts_compacts_and_switches_in_one_pass() {
+fn watch_interrupt_chain_is_exactly_once_and_advances_from_summary_evidence() {
     let temp = tempfile::tempdir().expect("tempdir");
     let projects = temp.path().join("projects");
     let cwd = temp.path().join("repo");
@@ -814,10 +812,9 @@ target_model = "claude-fable-5"
     let state = temp.path().join("state.json");
     let herdr_log = temp.path().join("herdr.log");
 
-    // Pass 1: the downgraded session's pane is WORKING. The fast path must
-    // run the entire chain synchronously — interrupt (Escape), compact,
-    // switch — in this single pass. It must never leave the switch for a
-    // later tick to deliver (a busy session is never observably idle).
+    // Pass 1: the downgraded session's pane is WORKING. The new chain must
+    // interrupt immediately and send exactly one compact, then wait for
+    // transcript evidence before switching.
     let (fake_herdr, fixture) = fake_herdr_with_sessions(
         temp.path(),
         &[(
@@ -853,9 +850,7 @@ target_model = "claude-fable-5"
         assert
     };
 
-    run("working pane").stdout(predicate::str::contains(
-        "interrupt then queue-compact then switch:claude-fable-5",
-    ));
+    run("working pane").stdout(predicate::str::contains("interrupt then compact"));
     let log = fs::read_to_string(&herdr_log).expect("herdr log");
     let escape_at = log
         .find("pane send-keys w13:p1 escape")
@@ -863,41 +858,63 @@ target_model = "claude-fable-5"
     let compact_at = log
         .find("pane run w13:p1 /compact")
         .expect("compact must be sent in the same pass");
-    let switch_at = log
-        .find("pane run w13:p1 /model claude-fable-5")
-        .expect("switch must be sent in the same pass, never left for a later tick");
-    let confirm_at = log
-        .find("pane send-keys w13:p1 enter")
-        .expect("model switch confirmation must be sent in the same pass");
     assert!(
-        escape_at < compact_at && compact_at < switch_at && switch_at < confirm_at,
-        "chain must run escape -> compact -> switch -> confirm in order, log: {log}"
+        escape_at < compact_at,
+        "chain must run escape -> compact in order, log: {log}"
     );
 
-    // Pass 2: the switch just fired, so the session is debounced — a second
-    // pass must not type anything again even if drift still shows (the
-    // transcript lags the live pane).
-    run("debounced follow-up").stdout(predicate::str::contains("debounce"));
+    // Three more armed passes while the compact is in flight must not
+    // double-compact, double-interrupt, or switch without summary evidence.
+    for index in 0..3 {
+        run(&format!("in-flight follow-up {index}")).stdout(predicate::str::contains(
+            "remediation-in-flight:compact-sent",
+        ));
+    }
     let log = fs::read_to_string(&herdr_log).expect("herdr log");
     assert_eq!(
         log.matches("/compact").count(),
         1,
-        "the follow-up pass must not compact again, log: {log}"
+        "in-flight follow-up passes must not compact again, log: {log}"
     );
     assert_eq!(
         log.matches("/model").count(),
-        1,
-        "the follow-up pass must not switch again, log: {log}"
+        0,
+        "switch must wait for compact summary evidence, log: {log}"
     );
     assert_eq!(
         log.matches("pane send-keys w13:p1 escape").count(),
         1,
-        "the follow-up pass must not escape again, log: {log}"
+        "in-flight follow-up passes must not escape again, log: {log}"
     );
+
+    append_compact_summary(
+        &projects,
+        "-Users-phaedrus-Development-adminifi",
+        "adminifi-session",
+        &cwd,
+    );
+    run("summary evidence").stdout(predicate::str::contains(
+        "switch:claude-fable-5 then continue",
+    ));
+    let log = fs::read_to_string(&herdr_log).expect("herdr log");
+    let switch_at = log
+        .find("pane run w13:p1 /model claude-fable-5")
+        .expect("switch must be sent after summary evidence");
+    let confirm_at = log
+        .find("pane send-keys w13:p1 enter")
+        .expect("model switch confirmation must be sent");
+    let continue_at = log
+        .find("pane run w13:p1 continue")
+        .expect("continue command must be sent after switching");
+    assert!(
+        compact_at < switch_at && switch_at < confirm_at && confirm_at < continue_at,
+        "chain must run compact -> switch -> confirm -> continue, log: {log}"
+    );
+    assert_eq!(log.matches("/compact").count(), 1, "log: {log}");
     assert_eq!(
-        log.matches("pane send-keys w13:p1 enter").count(),
+        log.matches("pane run w13:p1 continue").count(),
         1,
-        "the follow-up pass must not confirm again, log: {log}"
+        "log: {log}"
     );
 }
 
@@ -971,17 +988,17 @@ target_model = "claude-fable-5"
     run(&broken_herdr, false);
     let state_json = fs::read_to_string(&state).expect("state written");
     assert!(
-        !state_json.contains("pending_compact_unix"),
+        !state_json.contains("remediation_chain"),
         "aborted chain must clear the in-flight marker, state: {state_json}"
     );
 
     // Pass 2: herdr healthy again — the chain re-fires instead of sitting
-    // behind compact-pending.
+    // behind in-flight state.
     run(&fake_herdr, true);
     let log = fs::read_to_string(&herdr_log).expect("herdr log");
     assert!(
-        log.contains("pane run w13:p1 /model claude-fable-5"),
-        "retry tick must deliver the switch, log: {log}"
+        log.contains("pane send-keys w13:p1 escape") && log.contains("pane run w13:p1 /compact"),
+        "retry tick must restart the interrupt+compact step, log: {log}"
     );
 }
 
@@ -1078,9 +1095,7 @@ target_model = "claude-fable-5"
         .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "compact then switch:claude-fable-5",
-        ));
+        .stdout(predicate::str::contains("compact"));
 
     let log = fs::read_to_string(&herdr_log).expect("herdr log");
     assert!(
@@ -1202,13 +1217,11 @@ fn watch_auto_targets_fable_history_without_explicit_target() {
         .assert()
         .success()
         .stdout(predicate::str::contains("auto:fable"))
-        .stdout(predicate::str::contains(
-            "compact then switch:claude-fable-5",
-        ));
+        .stdout(predicate::str::contains("compact"));
 }
 
 #[test]
-fn watch_persists_action_state_and_debounces_next_pass() {
+fn watch_persists_chain_state_and_blocks_next_pass() {
     let temp = tempfile::tempdir().expect("tempdir");
     let projects = temp.path().join("projects");
     let cwd = temp.path().join("repo");
@@ -1252,13 +1265,12 @@ target_model = "claude-fable-5"
         .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "compact then switch:claude-fable-5",
-        ));
+        .stdout(predicate::str::contains("compact"));
 
     let state_json = fs::read_to_string(&state).expect("state");
     assert!(state_json.contains("adminifi-session"));
-    assert!(state_json.contains("last_action_unix"));
+    assert!(state_json.contains("remediation_chain"));
+    assert!(state_json.contains("compact_sent"));
 
     Command::cargo_bin("counterspell")
         .expect("binary")
@@ -1278,7 +1290,9 @@ target_model = "claude-fable-5"
         .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
         .assert()
         .success()
-        .stdout(predicate::str::contains("debounce"))
+        .stdout(predicate::str::contains(
+            "remediation-in-flight:compact-sent",
+        ))
         .stdout(predicate::str::contains("compact then switch").not());
 }
 
@@ -1369,7 +1383,7 @@ target_model = "claude-fable-5"
 }
 
 #[test]
-fn watch_arm_injects_compact_then_samples_status_then_model_switch() {
+fn watch_arm_switches_and_sends_continue_after_compact_summary() {
     let temp = tempfile::tempdir().expect("tempdir");
     let projects = temp.path().join("projects");
     let cwd = temp.path().join("repo");
@@ -1391,9 +1405,44 @@ session_id = "adminifi-session"
 target_model = "claude-fable-5"
 "#,
     );
-    let (fake_herdr, fixture) = fake_herdr(
+    let (fake_herdr, fixture) = fake_herdr_with_sessions(
         temp.path(),
-        &[("w13:p1", &cwd, "claude", "idle", "adminifi")],
+        &[(
+            "w13:p1",
+            &cwd,
+            "claude",
+            "idle",
+            false,
+            Some("adminifi-session"),
+        )],
+    );
+
+    Command::cargo_bin("counterspell")
+        .expect("binary")
+        .arg("--projects-dir")
+        .arg(&projects)
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("--recent-hours")
+        .arg("999")
+        .arg("watch")
+        .arg("--arm")
+        .env("HOME", temp.path())
+        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+        .env("COUNTERSPELL_HERDR_LOG", &herdr_log)
+        .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("compact"));
+
+    append_compact_summary(
+        &projects,
+        "-Users-phaedrus-Development-adminifi",
+        "adminifi-session",
+        &cwd,
     );
 
     Command::cargo_bin("counterspell")
@@ -1416,28 +1465,29 @@ target_model = "claude-fable-5"
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "compact then switch:claude-fable-5",
+            "switch:claude-fable-5 then continue",
         ));
 
     let log = fs::read_to_string(herdr_log).expect("herdr log");
     let compact = log.find("pane run w13:p1 /compact").expect("compact");
-    // Pacing between compact and switch is a direct status sample
-    // (`pane list`), not `wait agent-status`: managed panes settle to
-    // `done`, which the wait command cannot express, and the old wait
-    // burned its full 180s timeout on them.
-    let sample = log[compact..]
-        .find("pane list")
-        .map(|offset| compact + offset)
-        .expect("status sample after compact");
     let model = log
         .find("pane run w13:p1 /model claude-fable-5")
         .expect("model");
     let confirm = log
         .find("pane send-keys w13:p1 enter")
         .expect("model confirmation");
-    assert!(compact < sample);
-    assert!(sample < model);
+    let continue_at = log
+        .find("pane run w13:p1 continue")
+        .expect("continue command");
+    assert!(compact < model);
     assert!(model < confirm);
+    assert!(confirm < continue_at);
+    assert_eq!(log.matches("/compact").count(), 1, "log: {log}");
+    assert_eq!(
+        log.matches("pane run w13:p1 continue").count(),
+        1,
+        "log: {log}"
+    );
 }
 
 #[test]
@@ -1465,33 +1515,66 @@ fn watch_appends_activation_events_to_dedicated_stream_for_drift_remediation_and
         &["claude-opus-4-8"],
     );
     let config = write_config(temp.path(), "");
-    let (fake_herdr, fixture) = fake_herdr(
+    let (fake_herdr, fixture) = fake_herdr_with_sessions(
         temp.path(),
         &[
-            ("w13:p1", &drift_cwd, "claude", "idle", "drift"),
-            ("w13:p2", &opus_cwd, "claude", "idle", "opus"),
+            (
+                "w13:p1",
+                &drift_cwd,
+                "claude",
+                "idle",
+                false,
+                Some("drift-session"),
+            ),
+            (
+                "w13:p2",
+                &opus_cwd,
+                "claude",
+                "idle",
+                false,
+                Some("opus-session"),
+            ),
         ],
     );
 
-    Command::cargo_bin("counterspell")
-        .expect("binary")
-        .arg("--projects-dir")
-        .arg(&projects)
-        .arg("--config")
-        .arg(&config)
-        .arg("--state")
-        .arg(&state)
-        .arg("--recent-hours")
-        .arg("999")
-        .arg("watch")
-        .arg("--arm")
-        .env("HOME", temp.path())
-        .env("COUNTERSPELL_EVENTS_PATH", &events_path)
-        .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
-        .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
-        .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
-        .assert()
-        .success();
+    let run = || {
+        Command::cargo_bin("counterspell")
+            .expect("binary")
+            .arg("--projects-dir")
+            .arg(&projects)
+            .arg("--config")
+            .arg(&config)
+            .arg("--state")
+            .arg(&state)
+            .arg("--recent-hours")
+            .arg("999")
+            .arg("watch")
+            .arg("--arm")
+            .env("HOME", temp.path())
+            .env("COUNTERSPELL_EVENTS_PATH", &events_path)
+            .env("COUNTERSPELL_HERDR_BIN", &fake_herdr)
+            .env("COUNTERSPELL_HERDR_FIXTURE", &fixture)
+            .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
+            .assert()
+            .success()
+    };
+
+    run();
+    append_compact_summary(
+        &projects,
+        "-Users-phaedrus-Development-drift",
+        "drift-session",
+        &drift_cwd,
+    );
+    run();
+    append_model_line(
+        &projects,
+        "-Users-phaedrus-Development-drift",
+        "drift-session",
+        &drift_cwd,
+        "claude-fable-5",
+    );
+    run();
 
     // counterspell-910: telemetry lands in Counterspell's OWN dedicated
     // stream, never the shared fleet feed dir.
@@ -1504,6 +1587,7 @@ fn watch_appends_activation_events_to_dedicated_stream_for_drift_remediation_and
     assert!(events.contains(r#""action":"model_drift_detected""#));
     assert!(events.contains(r#""action":"compact_sent""#));
     assert!(events.contains(r#""action":"model_switched""#));
+    assert!(events.contains(r#""action":"continue_sent""#));
     assert!(events.contains(r#""action":"remediation_confirmed""#));
     assert!(events.contains(r#""action":"session_ignored""#));
     assert!(events.contains(r#""origin":"downgraded-from-fable""#));
@@ -1609,9 +1693,7 @@ target_model = "claude-fable-5"
         .env("COUNTERSPELL_TRANSCRIPT_QUIET_SECONDS", "0")
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "dry-run:compact then switch:claude-fable-5",
-        ));
+        .stdout(predicate::str::contains("dry-run:compact"));
 
     assert!(!state.exists());
 }
@@ -1962,9 +2044,7 @@ target_model = "claude-fable-5"
         // Detection still runs and the would-be remediation is reported, but
         // only ever as a dry-run — never as an executed action.
         .stdout(predicate::str::contains("watch pass"))
-        .stdout(predicate::str::contains(
-            "dry-run:compact then switch:claude-fable-5",
-        ));
+        .stdout(predicate::str::contains("dry-run:compact"));
 
     // Herdr is queried read-only for detection, but no keystrokes are ever
     // injected: no `pane run` (compact/switch commands) and no `pane
@@ -2037,9 +2117,7 @@ target_model = "claude-fable-5"
         .assert()
         .success()
         .stdout(predicate::str::contains("watch pass"))
-        .stdout(predicate::str::contains(
-            "compact then switch:claude-fable-5",
-        ));
+        .stdout(predicate::str::contains("compact"));
 
     assert!(!marker.exists(), "test must not have created a marker");
 }
@@ -2295,6 +2373,34 @@ fn write_transcript_with_models(
         ));
     }
     fs::write(&path, format!("{}\n", lines.join("\n"))).expect("transcript");
+}
+
+fn append_compact_summary(projects: &Path, project: &str, session_id: &str, cwd: &Path) {
+    let path = projects.join(project).join(format!("{session_id}.jsonl"));
+    let line = format!(
+        r#"{{"type":"summary","sessionId":"{session_id}","timestamp":"{}","cwd":"{}","summary":"Plain handoff summary"}}"#,
+        chrono::Utc::now().to_rfc3339(),
+        cwd.display()
+    );
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .expect("open transcript for summary");
+    writeln!(file, "{line}").expect("append compact summary");
+}
+
+fn append_model_line(projects: &Path, project: &str, session_id: &str, cwd: &Path, model: &str) {
+    let path = projects.join(project).join(format!("{session_id}.jsonl"));
+    let line = format!(
+        r#"{{"type":"assistant","sessionId":"{session_id}","timestamp":"{}","cwd":"{}","message":{{"model":"{model}"}}}}"#,
+        chrono::Utc::now().to_rfc3339(),
+        cwd.display()
+    );
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .expect("open transcript for model line");
+    writeln!(file, "{line}").expect("append model line");
 }
 
 fn write_config(temp_path: &Path, contents: &str) -> PathBuf {

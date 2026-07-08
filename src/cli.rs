@@ -237,7 +237,7 @@ pub(crate) struct UiArgs {
 
 #[derive(Debug, Args)]
 struct WatchArgs {
-    /// Arm eligible compact/switch actions. Without this, watch is a dry-run.
+    /// Arm eligible remediation-chain actions. Without this, watch is a dry-run.
     #[arg(long)]
     arm: bool,
 }

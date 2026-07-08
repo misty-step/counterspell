@@ -3,11 +3,15 @@ use chrono::{DateTime, Utc};
 
 use crate::events::FeedEvent;
 use crate::herdr::{matching_panes_for_session, pane_id, HerdrPane};
-use crate::model::{Config, SessionState, StatusRow, TranscriptSession, WatchRow, WatchStore};
+use crate::model::{
+    Config, PlannedAction, RemediationChainState, RemediationStep, SessionState, StatusRow,
+    TargetMatch, TranscriptSession, WatchRow, WatchStore,
+};
 use crate::remediation::{
-    describe_actions, describe_gate, describe_watch_actions, detect_actionable_drift,
-    execute_remediation, format_target_match, gate_decision_for_matches, is_auto_fable_target,
-    remediation_plan, status_state, target_for_session,
+    chain_has_completion_evidence, compact_summary_after_chain_start, describe_actions,
+    describe_gate, describe_watch_actions, detect_actionable_drift, execute_remediation,
+    format_target_match, gate_decision_for_matches, is_auto_fable_target, remediation_plan,
+    status_state, target_for_session,
 };
 use crate::util::{human_age, join_or_dash, short_session};
 
@@ -123,9 +127,43 @@ pub(crate) fn watch_rows(
     for session in sessions {
         let matching_panes =
             matching_panes_for_session(&session.session_id, session.cwd.as_deref(), panes);
+        let now_unix: u64 = now.timestamp().try_into().unwrap_or(0);
+        let completed_chain = store
+            .sessions
+            .get(&session.session_id)
+            .and_then(|state| state.remediation_chain.as_ref())
+            .filter(|chain| chain_has_completion_evidence(session, chain))
+            .cloned();
+        if let Some(chain) = &completed_chain {
+            store.sessions.insert(
+                session.session_id.clone(),
+                SessionState {
+                    session_id: session.session_id.clone(),
+                    cwd: session.cwd.clone(),
+                    last_action_unix: session
+                        .latest_model_at
+                        .and_then(|at| at.timestamp().try_into().ok())
+                        .or(Some(now_unix)),
+                    pending_compact_unix: None,
+                    remediation_chain: None,
+                },
+            );
+            store_changed = true;
+            feed_events.push(FeedEvent {
+                session_id: session.session_id.clone(),
+                pane: event_pane(&matching_panes),
+                from_model: "-".to_string(),
+                to_model: chain.target_model.clone(),
+                gate: "allowed".to_string(),
+                action: "remediation_confirmed".to_string(),
+                action_taken: "confirmed".to_string(),
+                origin: "evidence".to_string(),
+            });
+        }
+
         let state: Option<&SessionState> = store.sessions.get(&session.session_id);
         let prior_last_action_unix = state.and_then(|state| state.last_action_unix);
-        let prior_pending_compact_unix = state.and_then(|state| state.pending_compact_unix);
+        let prior_chain = state.and_then(|state| state.remediation_chain.clone());
         let plan = remediation_plan(session, &matching_panes, state, config, now);
         let target = target_for_session(session, config);
         let drift = target
@@ -171,59 +209,52 @@ pub(crate) fn watch_rows(
             });
         }
 
-        if drift.is_none() && prior_pending_compact_unix.is_some() {
-            // Stale in-flight marker with no drift left (chain finished via
-            // an operator's manual /model, or drift resolved out of band).
-            // Clear it so it can never gate a future remediation.
-            store.sessions.insert(
-                session.session_id.clone(),
-                SessionState {
-                    session_id: session.session_id.clone(),
-                    cwd: session.cwd.clone(),
-                    last_action_unix: prior_last_action_unix,
-                    pending_compact_unix: None,
-                },
-            );
-            store_changed = true;
-        }
-
         if arm && !plan.actions.is_empty() {
             // The gate only allows a plan when exactly one pane matched.
             let pane = matching_panes
                 .first()
                 .copied()
                 .context("eligible remediation plan had no Herdr pane")?;
-            let now_unix: u64 = now.timestamp().try_into().unwrap_or(0);
-            let sends_compact = plan.actions.iter().any(|action| {
-                matches!(
-                    action,
-                    crate::model::PlannedAction::Compact
-                        | crate::model::PlannedAction::QueueCompact
-                )
-            });
-            if sends_compact {
-                // Persist the in-flight marker to disk BEFORE typing
-                // anything, so a concurrently launched watch (or a restart
-                // after a crash mid-chain) blocks on CompactPending instead
-                // of double-Escaping the same pane.
-                store.sessions.insert(
-                    session.session_id.clone(),
-                    SessionState {
-                        session_id: session.session_id.clone(),
-                        cwd: session.cwd.clone(),
-                        last_action_unix: prior_last_action_unix,
-                        pending_compact_unix: Some(now_unix),
-                    },
-                );
-                if let Some(state_path) = state_path {
-                    crate::store::save_store(state_path, store)?;
-                }
+            let target_model = target
+                .as_ref()
+                .map(|target| target.target_model.clone())
+                .or_else(|| prior_chain.as_ref().map(|chain| chain.target_model.clone()))
+                .unwrap_or_else(|| crate::defaults::DEFAULT_TARGET_MODEL.to_string());
+            let restart_chain = plan.recovery_reason.is_some()
+                && prior_chain
+                    .as_ref()
+                    .is_some_and(|chain| !compact_summary_after_chain_start(session, chain))
+                && plan
+                    .actions
+                    .iter()
+                    .any(|action| matches!(action, PlannedAction::Interrupt));
+            let chain_started_unix = if restart_chain {
+                now_unix
+            } else {
+                prior_chain
+                    .as_ref()
+                    .map(|chain| chain.started_unix)
+                    .unwrap_or(now_unix)
+            };
+
+            if let Some(reason) = &plan.recovery_reason {
+                let (from_model, to_model) = drift_models(&drift, &target_model);
+                feed_events.push(FeedEvent {
+                    session_id: session.session_id.clone(),
+                    pane: pane_id(pane).to_string(),
+                    from_model,
+                    to_model,
+                    gate: gate.clone(),
+                    action: "remediation_recovery".to_string(),
+                    action_taken: reason.clone(),
+                    origin: target_origin(target.as_ref()).to_string(),
+                });
             }
-            if let Err(error) = execute_remediation(pane_id(pane), &plan.actions) {
-                // The chain died; nothing is in flight anymore. Leaving the
-                // marker set would block every retry for its whole expiry
-                // while the session keeps working downgraded (2026-07-04,
-                // second incident). Clear it so the next tick re-fires.
+
+            for action in &plan.actions {
+                let Some(step) = step_for_action(action) else {
+                    continue;
+                };
                 store.sessions.insert(
                     session.session_id.clone(),
                     SessionState {
@@ -231,96 +262,51 @@ pub(crate) fn watch_rows(
                         cwd: session.cwd.clone(),
                         last_action_unix: prior_last_action_unix,
                         pending_compact_unix: None,
+                        remediation_chain: Some(RemediationChainState {
+                            target_model: target_model.clone(),
+                            started_unix: chain_started_unix,
+                            step_sent_unix: now_unix,
+                            step,
+                            recovery_reason: plan.recovery_reason.clone(),
+                        }),
                     },
                 );
                 if let Some(state_path) = state_path {
                     crate::store::save_store(state_path, store)?;
                 }
-                return Err(error);
-            }
-            let switched = plan
-                .actions
-                .iter()
-                .any(|action| matches!(action, crate::model::PlannedAction::SwitchModel(_)));
-            store.sessions.insert(
-                session.session_id.clone(),
-                SessionState {
+
+                if let Err(error) = execute_remediation(pane_id(pane), std::slice::from_ref(action))
+                {
+                    // The command failed before we can trust the send. Clear
+                    // the in-flight state so the next pass can retry from
+                    // live evidence instead of waiting for a phantom step.
+                    store.sessions.insert(
+                        session.session_id.clone(),
+                        SessionState {
+                            session_id: session.session_id.clone(),
+                            cwd: session.cwd.clone(),
+                            last_action_unix: prior_last_action_unix,
+                            pending_compact_unix: None,
+                            remediation_chain: None,
+                        },
+                    );
+                    if let Some(state_path) = state_path {
+                        crate::store::save_store(state_path, store)?;
+                    }
+                    return Err(error);
+                }
+                store_changed = true;
+                let (from_model, to_model) = drift_models(&drift, &target_model);
+                feed_events.push(FeedEvent {
                     session_id: session.session_id.clone(),
-                    cwd: session.cwd.clone(),
-                    // The debounce clock starts at the model switch.
-                    last_action_unix: if switched {
-                        Some(now_unix)
-                    } else {
-                        prior_last_action_unix
-                    },
-                    // The chain completed; the in-flight marker comes off.
-                    pending_compact_unix: None,
-                },
-            );
-            store_changed = true;
-            if let Some(drift) = &drift {
-                for action in &plan.actions {
-                    feed_events.push(FeedEvent {
-                        session_id: session.session_id.clone(),
-                        pane: pane_id(pane).to_string(),
-                        from_model: drift.from.clone(),
-                        to_model: drift.to.clone(),
-                        gate: gate.clone(),
-                        action: match action {
-                            crate::model::PlannedAction::Compact => "compact_sent".to_string(),
-                            crate::model::PlannedAction::Interrupt => "interrupt_sent".to_string(),
-                            crate::model::PlannedAction::QueueCompact => {
-                                "compact_queued".to_string()
-                            }
-                            crate::model::PlannedAction::SwitchModel(_) => {
-                                "model_switched".to_string()
-                            }
-                        },
-                        action_taken: match action {
-                            crate::model::PlannedAction::Compact => "compact_sent".to_string(),
-                            crate::model::PlannedAction::Interrupt => "interrupt_sent".to_string(),
-                            crate::model::PlannedAction::QueueCompact => {
-                                "compact_queued".to_string()
-                            }
-                            crate::model::PlannedAction::SwitchModel(model) => {
-                                format!("model_switched:{model}")
-                            }
-                        },
-                        origin: target
-                            .as_ref()
-                            .map(|target| {
-                                if is_auto_fable_target(target) {
-                                    "downgraded-from-fable"
-                                } else {
-                                    "configured-target-drift"
-                                }
-                            })
-                            .unwrap_or("unknown")
-                            .to_string(),
-                    });
-                }
-                if switched {
-                    feed_events.push(FeedEvent {
-                        session_id: session.session_id.clone(),
-                        pane: pane_id(pane).to_string(),
-                        from_model: drift.from.clone(),
-                        to_model: drift.to.clone(),
-                        gate: gate.clone(),
-                        action: "remediation_confirmed".to_string(),
-                        action_taken: "confirmed".to_string(),
-                        origin: target
-                            .as_ref()
-                            .map(|target| {
-                                if is_auto_fable_target(target) {
-                                    "downgraded-from-fable"
-                                } else {
-                                    "configured-target-drift"
-                                }
-                            })
-                            .unwrap_or("unknown")
-                            .to_string(),
-                    });
-                }
+                    pane: pane_id(pane).to_string(),
+                    from_model,
+                    to_model,
+                    gate: gate.clone(),
+                    action: action_event(action).to_string(),
+                    action_taken: action_taken(action),
+                    origin: target_origin(target.as_ref()).to_string(),
+                });
             }
         }
         rows.push(WatchRow {
@@ -362,6 +348,52 @@ fn drift_action_taken(
     } else {
         format!("dry-run:{}", describe_actions(actions))
     }
+}
+
+fn step_for_action(action: &PlannedAction) -> Option<RemediationStep> {
+    match action {
+        PlannedAction::Interrupt => Some(RemediationStep::Interrupt),
+        PlannedAction::Compact => Some(RemediationStep::Compact),
+        PlannedAction::SwitchModel(_) => Some(RemediationStep::Switch),
+        PlannedAction::Continue => Some(RemediationStep::Continue),
+    }
+}
+
+fn action_event(action: &PlannedAction) -> &'static str {
+    match action {
+        PlannedAction::Interrupt => "interrupt_sent",
+        PlannedAction::Compact => "compact_sent",
+        PlannedAction::SwitchModel(_) => "model_switched",
+        PlannedAction::Continue => "continue_sent",
+    }
+}
+
+fn action_taken(action: &PlannedAction) -> String {
+    match action {
+        PlannedAction::Interrupt => "interrupt_sent".to_string(),
+        PlannedAction::Compact => "compact_sent".to_string(),
+        PlannedAction::SwitchModel(model) => format!("model_switched:{model}"),
+        PlannedAction::Continue => "continue_sent".to_string(),
+    }
+}
+
+fn target_origin(target: Option<&TargetMatch>) -> &'static str {
+    target
+        .map(|target| {
+            if is_auto_fable_target(target) {
+                "downgraded-from-fable"
+            } else {
+                "configured-target-drift"
+            }
+        })
+        .unwrap_or("unknown")
+}
+
+fn drift_models(drift: &Option<crate::model::ModelDrift>, target_model: &str) -> (String, String) {
+    drift
+        .as_ref()
+        .map(|drift| (drift.from.clone(), drift.to.clone()))
+        .unwrap_or_else(|| ("unknown".to_string(), target_model.to_string()))
 }
 
 fn event_pane(panes: &[&HerdrPane]) -> String {
