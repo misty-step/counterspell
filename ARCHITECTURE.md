@@ -81,6 +81,52 @@ not write debounce state and does not send text to Herdr.
 
 `counterspell watch --arm` executes only plans that pass all gates.
 
+## Master Switch And Session Overrides
+
+Counterspell exposes two write surfaces for turning enforcement off, and both
+are the stable contract any app (CLI, dashboard, or the Tauri desktop app)
+writes to. Neither surface shells out to `launchctl` from a request path;
+daemon lifecycle is a separate, deliberately terminal-only concern.
+
+**Global master switch — a marker file.** Presence of the marker at
+`~/.counterspell/disarmed` (overridable with `--disarm-marker` or
+`COUNTERSPELL_DISARM_MARKER`) is the single global off switch. Semantics:
+
+- **Absent marker means ENABLED** — the pre-master-switch default, so existing
+  installs and the live daemon keep enforcing until someone opts into
+  disabling. The file's contents are a human-readable timestamp only; the gate
+  checks presence, never contents.
+- While the marker exists, `counterspell watch --arm` is **demoted to a
+  detection-only dry-run**: it still detects and logs drift to the bridge feed
+  (a paused window is never dark), but never plans a remediation into
+  keystrokes. The gate is the single `if arm` guard around `execute_remediation`
+  in `watch_rows`; disabling forces `arm` false for the whole pass.
+
+Write it three ways, all flipping the same marker:
+
+| Surface | Command / route | Touches launchd? |
+| --- | --- | --- |
+| CLI disable | `counterspell disable` | no (marker only) |
+| CLI enable | `counterspell enable` | **yes** — also un-disables and (re)loads the watch-arm LaunchAgent so a cleared flag actually results in ticks |
+| Dashboard | `POST /master/disable`, `POST /master/enable` | **never** — flag only (`master::enable_flag_only`); a browser request can never reach `launchctl` |
+
+Because the dashboard toggle is flag-only, it is pause/resume for an
+already-loaded daemon. Reviving a cold (unloaded or `launchctl disable`d)
+daemon is a deliberate terminal action (`counterspell enable`, or
+`install-ui`), never a click. The dashboard therefore shows **both axes** —
+the flag state and whether the watch-arm daemon is actually
+installed+scheduled (`watch_arm_daemon_status`, a read-only `launchctl print`)
+— and warns loudly on the one dangerous combination: flag ENABLED but daemon
+not scheduled, where nothing will actually run. `counterspell status` and
+`doctor` print the flag state and marker path.
+
+**Per-session overrides.** Independent of the global switch, individual
+`session_id` targets can be enabled/disabled without editing config: the
+dashboard's `POST /targets/enable` and `POST /targets/disable` routes (and the
+`counterspell target` subcommand) write the per-session policy. All mutating
+dashboard routes require a same-origin `Origin`/`Referer` (CSRF guard); a
+missing or mismatched origin returns 403 and changes nothing.
+
 ## Fast Path: Act While The Downgraded Turn Is Still Running
 
 Waiting for idle would let a downgraded session finish its whole turn on the
