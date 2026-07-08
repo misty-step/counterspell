@@ -158,3 +158,188 @@
   border-top: 0;
   padding-top: 0;
 }
+
+/* ── content pages: window scrolls, not an inner column ──────────────── */
+
+/* The kit's .ae-screen is a 100dvh, overflow:hidden shell whose .ae-stage
+   scrolls internally — which floats a scrollbar mid-page between the fixed
+   header and footer. On flowing content pages we opt out: the screen grows
+   with its content and the window itself scrolls, so any scrollbar sits
+   flush at the window edge. index.html keeps the locked single-viewport
+   hero shell (it does not carry .msk-flow). */
+.ae-screen.msk-flow {
+  height: auto;
+  min-height: 100dvh;
+  overflow: visible;
+}
+
+.msk-flow .ae-stage {
+  overflow-y: visible;
+  flex: 1 0 auto;
+}
+
+/* ── selection: clearly visible over surface AND the code-block wash ──── */
+
+/* The kit default paints ::selection with --ae-wash, which is exactly the
+   background of <pre>/<code>, making selection inside code invisible. A
+   translucent accent reads on both the page surface and the wash, in both
+   themes. */
+::selection {
+  background: rgba(38, 67, 208, 0.28);
+  color: var(--ae-ink);
+}
+::-moz-selection {
+  background: rgba(38, 67, 208, 0.28);
+  color: var(--ae-ink);
+}
+:root.dark ::selection,
+:root[data-ae-mode='dark'] ::selection {
+  background: rgba(140, 158, 255, 0.38);
+}
+:root.dark ::-moz-selection,
+:root[data-ae-mode='dark'] ::-moz-selection {
+  background: rgba(140, 158, 255, 0.38);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not([data-ae-mode='light']) ::selection {
+    background: rgba(140, 158, 255, 0.38);
+  }
+  :root:not(.light):not([data-ae-mode='light']) ::-moz-selection {
+    background: rgba(140, 158, 255, 0.38);
+  }
+}
+
+/* ── all-page atmosphere: the hero image, far quieter, fixed behind ───── */
+
+/* Painted at z-index:-1 so it sits above the opaque page surface (the
+   canvas background) but below all content — text contrast is untouched.
+   Opacity is tuned per theme in renders. */
+.msk-flow {
+  --msk-hero-image: url('assets/hero.jpg');
+}
+
+.msk-page-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image: var(--msk-hero-image);
+  background-size: cover;
+  background-position: center;
+  opacity: 0.05;
+  pointer-events: none;
+}
+
+:root.dark .msk-page-bg,
+:root[data-ae-mode='dark'] .msk-page-bg {
+  opacity: 0.08;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not([data-ae-mode='light']) .msk-page-bg {
+    opacity: 0.08;
+  }
+}
+
+/* ── copy buttons on code blocks (behavior in copy.js) ───────────────── */
+
+.msk-codewrap {
+  position: relative;
+  margin: 1.2em 0;
+}
+
+.msk-codewrap > pre {
+  margin: 0;
+}
+
+/* Grid/flex items default to min-width:auto, so a <pre> with long unbreakable
+   lines (release URLs) refuses to shrink and blows the whole .msk-page grid
+   wider than a phone viewport. min-width:0 lets the track shrink and the code
+   block scroll inside itself (overflow-x:auto) instead of the page. */
+.msk-page,
+.msk-page > *,
+.msk-codewrap,
+.msk-codewrap > pre {
+  min-width: 0;
+}
+
+.msk-codewrap {
+  max-width: 100%;
+}
+
+.msk-copy {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  color: var(--ae-ink-muted);
+  background: color-mix(in srgb, var(--ae-surface) 82%, transparent);
+  border: 1px solid var(--ae-line);
+  border-radius: var(--ae-radius);
+  cursor: pointer;
+  opacity: 0.55;
+  transition:
+    opacity var(--ae-quick) var(--ae-ease),
+    color var(--ae-quick) var(--ae-ease),
+    border-color var(--ae-quick) var(--ae-ease);
+}
+
+.msk-codewrap:hover .msk-copy,
+.msk-copy:focus-visible {
+  opacity: 1;
+}
+
+.msk-copy:hover {
+  color: var(--ae-ink);
+  border-color: var(--ae-ink-faint);
+}
+
+.msk-copy .ae-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+.msk-copy .msk-copy-check {
+  display: none;
+  color: var(--ae-ok);
+}
+
+.msk-copy.is-copied {
+  color: var(--ae-ok);
+  border-color: var(--ae-ok);
+}
+
+.msk-copy.is-copied .msk-copy-copy {
+  display: none;
+}
+
+.msk-copy.is-copied .msk-copy-check {
+  display: inline-flex;
+}
+
+/* the delight: copy glyph morphs into the check with a quick pop.
+   Reduced-motion users get an instant, motionless swap. */
+@media (prefers-reduced-motion: no-preference) {
+  .msk-copy.is-copied .msk-copy-check {
+    animation: msk-copy-pop var(--ae-soft) var(--ae-ease);
+  }
+}
+
+@keyframes msk-copy-pop {
+  0% {
+    transform: scale(0.4) rotate(-25deg);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.15) rotate(4deg);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) rotate(0);
+    opacity: 1;
+  }
+}
