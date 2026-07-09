@@ -83,136 +83,78 @@
       <main class="ae-stage ae-stage-scroll">
         <article class="ae-doc msk-page" aria-labelledby="release-notes-title">
           <h1 id="release-notes-title">What's new in Counterspell</h1>
-          <p class="ae-lede">
-            These notes say what each release lets you do, in plain terms.
-            Counterspell has one tagged release,
-            <a href="https://github.com/misty-step/counterspell/releases/tag/v0.1.0"
-              >v0.1.0</a
-            >, and has kept shipping since.
-          </p>
 
-          <div class="msk-relnotes">
-            <section class="msk-relcard">
-              <div class="msk-relcard-head">
-                <span class="ae-chrome">2026-07-07 - recovery</span>
+          <div class="msk-accordion">
+            <details class="msk-acc-entry" open>
+              <summary class="msk-acc-head">
+                <span class="msk-acc-ver">v0.1.0</span>
+                <span class="msk-acc-date">2026-07-02 &mdash; present</span>
+                <span class="msk-acc-chev" aria-hidden="true"></span>
+              </summary>
+              <div class="msk-acc-body">
+                <p class="ae-item">
+                  Everything shipped so far, in plain terms: point
+                  Counterspell at your machine and it finds your Claude Code
+                  sessions, keeps the ones you chose to run on Fable pinned
+                  there, and stays out of the way of everything else.
+                </p>
+                <ul>
+                  <li>
+                    Watches every Claude Code session that has ever run
+                    Fable and puts it back automatically the moment it
+                    drifts to another model — mid-turn, before you lose the
+                    whole turn to the wrong model.
+                  </li>
+                  <li>
+                    Binds each session to its own terminal window by a
+                    stable session id, never by which window happens to be
+                    focused, and holds off instead of guessing when a match
+                    is ambiguous.
+                  </li>
+                  <li>
+                    Re-attaches a window to its session yourself, in one
+                    command, right after a restart, a resume, or a
+                    <code>/clear</code> — no waiting for the next automatic
+                    check.
+                  </li>
+                  <li>
+                    A global switch turns every enforcement action off in
+                    one command, and shows you whether the background watch
+                    has picked up the change.
+                  </li>
+                  <li>
+                    A local dashboard lists every window, session, and
+                    policy at a glance, fed by its own dedicated event
+                    stream, with a menu-bar indicator always showing what
+                    it's watching.
+                  </li>
+                  <li>
+                    A native desktop app ships alongside the command line,
+                    with a tray icon and window controls for anyone who
+                    prefers a GUI to a terminal.
+                  </li>
+                  <li>
+                    Installs from a single command, with signed release
+                    binaries for both Apple-silicon and Intel Macs, and a
+                    public marketing site and docs alongside the binary.
+                  </li>
+                </ul>
+                <p class="ae-status">
+                  <svg class="ae-icon ae-ok" data-lucide="circle-check">
+                    <use href="#i-circle-check" />
+                  </svg>
+                  <span class="ae-status-label"
+                    >Tagged as
+                    <a
+                      href="https://github.com/misty-step/counterspell/releases/tag/v0.1.0"
+                      >v0.1.0</a
+                    >
+                    with signed download archives.</span
+                  >
+                </p>
               </div>
-              <h2>Recover a session instantly after a restart or /clear</h2>
-              <p class="ae-item">
-                When a session gets reset, you no longer wait for the next
-                automatic check to protect it again — re-attach it yourself in
-                one command.
-              </p>
-              <ul>
-                <li>
-                  <code>counterspell rebind</code> re-attaches a pane to its
-                  session right after a restart, a resume, or a
-                  <code>/clear</code>, instead of waiting for the next
-                  automatic check.
-                </li>
-                <li>
-                  When it cannot tell for sure which pane owns a session, it
-                  now holds off rather than guessing — and quietly recovers on
-                  its own once a pane reports in.
-                </li>
-              </ul>
-              <p class="ae-status">
-                <svg class="ae-icon ae-ok" data-lucide="circle-check">
-                  <use href="#i-circle-check" />
-                </svg>
-                <span class="ae-status-label"
-                  >Shipped and verified live.</span
-                >
-              </p>
-            </section>
-
-            <section class="msk-relcard">
-              <div class="msk-relcard-head">
-                <span class="ae-chrome">2026-07-04 - mid-turn fix</span>
-              </div>
-              <h2>A downgrade now gets fixed before your turn even finishes</h2>
-              <p class="ae-item">
-                You stop losing a whole turn to the wrong model — the moment a
-                session drifts, the fix is already on its way.
-              </p>
-              <ul>
-                <li>
-                  The fix lands mid-turn: the instant a session drifts,
-                  Counterspell queues a <code>/compact</code> handoff and
-                  sends <code>/model</code> on the next idle pass — no more
-                  watching a wrong-model turn run to the end.
-                </li>
-                <li>
-                  It always acts on the right pane, matched by the
-                  Herdr-reported session id rather than a guess.
-                </li>
-                <li>
-                  The whole thing now installs, sets up its dashboard, and
-                  starts watching from a single command:
-                  <code>counterspell setup --install-ui --load-ui</code>.
-                </li>
-              </ul>
-            </section>
-
-            <section class="msk-relcard">
-              <div class="msk-relcard-head">
-                <span class="ae-chrome">2026-07-03 - dashboard</span>
-              </div>
-              <h2>See everything it is watching in one place</h2>
-              <p class="ae-item">
-                You get a clear, local view of every session and policy — and
-                safer behavior when two panes look alike.
-              </p>
-              <ul>
-                <li>
-                  A local dashboard now shows every pane, session, and the
-                  policy applied to each, so you can see exactly what
-                  Counterspell is doing.
-                </li>
-                <li>
-                  When two panes look like the same session, it only picks
-                  one if the answer is unambiguous — otherwise it waits.
-                </li>
-                <li>
-                  Signed builds for both Apple-silicon and Intel Macs, so
-                  install just works.
-                </li>
-              </ul>
-            </section>
-
-            <section class="msk-relcard">
-              <div class="msk-relcard-head">
-                <span class="ae-chrome">2026-07-02</span>
-                <span class="ae-tag">v0.1.0</span>
-              </div>
-              <h2>Start protecting your Fable sessions</h2>
-              <p class="ae-item">
-                The first release: point Counterspell at your machine and it
-                finds your Claude Code sessions, shows which ones it is
-                watching, and never touches anything you did not ask it to.
-              </p>
-              <ul>
-                <li>
-                  One command finds your recent Claude Code sessions, maps
-                  them to their Herdr panes, and tells you which are watched
-                  and which are ignored.
-                </li>
-                <li>
-                  Opt-in from the very first run — a session is only ever
-                  changed if it matches a target you set, never by guess.
-                </li>
-              </ul>
-              <p class="ae-status">
-                <svg class="ae-icon ae-ok" data-lucide="circle-check">
-                  <use href="#i-circle-check" />
-                </svg>
-                <span class="ae-status-label"
-                  >Tagged as
-                  <a href="https://github.com/misty-step/counterspell/releases/tag/v0.1.0"
-                    >v0.1.0</a
-                  > with signed download archives.</span
-                >
-              </p>
-            </section>
+            </details>
+            <!-- counterspell-927: future landmark-cut releases drop in here as one more .msk-acc-entry <details> block, newest first -->
           </div>
 
           <p class="ae-chrome msk-gh-link">

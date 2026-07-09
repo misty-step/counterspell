@@ -78,137 +78,48 @@
 
       <main class="ae-stage ae-stage-scroll" id="content">
         <div class="msk-page">
-          <section aria-labelledby="features-title">
-            <h2 class="ae-h" id="features-title">Why it matters</h2>
-            <div class="ae-list-rows">
-              <div class="ae-list-row">
-                <span class="ae-list-cell">
-                  <span class="ae-list-label">job</span>
-                  <span class="ae-list-value"
-                    >Detect any Claude Code session that has ever run
-                    <code>claude-fable-5</code> and pin it back the moment it
-                    drifts to another model.</span
-                  >
-                </span>
-                <span class="ae-list-cell">
-                  <span class="ae-list-label">proof</span>
-                  <span class="ae-list-value"
-                    >The match is history-based, not latest-model-only, so a
-                    session stays watched even after it has already
-                    drifted.</span
-                  >
-                </span>
-              </div>
-              <div class="ae-list-row">
-                <span class="ae-list-cell">
-                  <span class="ae-list-label">job</span>
-                  <span class="ae-list-value"
-                    >Bind a session to a pane by the Herdr-reported session id,
-                    never by focus or a cwd guess.</span
-                  >
-                </span>
-                <span class="ae-list-cell">
-                  <span class="ae-list-label">proof</span>
-                  <span class="ae-list-value"
-                    >Ambiguous multi-pane matches hard-block armed
-                    remediation instead of guessing which pane owns the
-                    session.</span
-                  >
-                </span>
-              </div>
-              <div class="ae-list-row">
-                <span class="ae-list-cell">
-                  <span class="ae-list-label">job</span>
-                  <span class="ae-list-value"
-                    >Act while the downgraded turn is still running, not after
-                    it finishes on the wrong model.</span
-                  >
-                </span>
-                <span class="ae-list-cell">
-                  <span class="ae-list-label">proof</span>
-                  <span class="ae-list-value"
-                    >The fast path queues <code>/compact</code> mid-turn and
-                    sends <code>/model</code> on the next idle pass — a
-                    dialog-free switch, no cache-rewind confirmation.</span
-                  >
-                </span>
-              </div>
-              <div class="ae-list-row">
-                <span class="ae-list-cell">
-                  <span class="ae-list-label">job</span>
-                  <span class="ae-list-value"
-                    >Stay opt-in and hands-off deliberate sessions.</span
-                  >
-                </span>
-                <span class="ae-list-cell">
-                  <span class="ae-list-label">proof</span>
-                  <span class="ae-list-value"
-                    >Sessions that have never run Fable and match no configured
-                    target are ignored, including deliberate Sonnet or Opus
-                    work.</span
-                  >
-                </span>
-              </div>
-            </div>
+          <section class="msk-feat-hero" aria-labelledby="features-title">
+            <p class="ae-h msk-feat-kick">features</p>
+            <h1 class="msk-feat-title" id="features-title">
+              Keep your Fable sessions on Fable.
+            </h1>
+            <p class="ae-dim msk-feat-sub">
+              Counterspell watches every Claude Code session that has ever run
+              <code>claude-fable-5</code> and puts it back the moment it
+              drifts — automatically, before your turn ends.
+            </p>
           </section>
 
-          <section class="msk-section" id="how" aria-labelledby="how-title">
-            <div class="msk-section-head">
-              <h2 class="ae-h" id="how-title">How it watches</h2>
-              <p class="ae-dim">
-                One Rust binary, three boundaries: Claude transcript JSONLs,
-                live Herdr pane state, and an optional config file. No
-                background daemon beyond the LaunchAgent that runs the armed
-                watch on a schedule.
-              </p>
+          <div class="msk-job-rows">
+            <div class="msk-job-row">
+              <span class="msk-job-k">Stay on Fable</span>
+              <span class="msk-job-v"
+                >Your sessions stay on the model you chose</span
+              >
             </div>
-            <div class="ae-list-rows">
-              <div class="ae-list-row">
-                <span class="ae-list-cell">
-                  <span class="ae-list-label">detect</span>
-                  <span class="ae-list-value"
-                    ><code>counterspell status</code> discovers recent
-                    transcripts, maps them to Herdr panes by cwd, and shows
-                    watched, unmatched, and live-pane rows without a recent
-                    transcript.</span
-                  >
-                </span>
-                <span class="ae-list-cell">
-                  <span class="ae-list-label">gate</span>
-                  <span class="ae-list-value"
-                    >Armed remediation only fires once transcript-quiet,
-                    pane-idle, and debounce all pass — or the session-id fast
-                    path is bound and the pane is working.</span
-                  >
-                </span>
-              </div>
-              <div class="ae-list-row">
-                <span class="ae-list-cell">
-                  <span class="ae-list-label">remediate</span>
-                  <span class="ae-list-value"
-                    ><code>counterspell watch --arm</code> sends a plain
-                    <code>/compact</code> handoff, waits for idle, then sends
-                    <code>/model claude-fable-5</code>.</span
-                  >
-                </span>
-                <span class="ae-list-cell">
-                  <span class="ae-list-label">observe</span>
-                  <span class="ae-list-value"
-                    ><code>counterspell ui</code> serves a local Herdr column
-                    drilldown — workspace, pane, session, policy — with a
-                    menu-bar dot via the bundled SwiftBar plugin.</span
-                  >
-                </span>
-              </div>
+            <div class="msk-job-row">
+              <span class="msk-job-k">No wrong window</span>
+              <span class="msk-job-v">It always acts on the right window</span>
             </div>
-          </section>
+            <div class="msk-job-row">
+              <span class="msk-job-k">Fix mid-turn</span>
+              <span class="msk-job-v"
+                >A downgrade reverses before the turn even finishes</span
+              >
+            </div>
+            <div class="msk-job-row">
+              <span class="msk-job-k">Hands off</span>
+              <span class="msk-job-v"
+                >Your deliberate model choices stay untouched</span
+              >
+            </div>
+          </div>
 
-          <section class="msk-section msk-release-slot" aria-labelledby="release-title">
-            <h2 class="ae-h" id="release-title">Release notes</h2>
-            <p>
-              Read what shipped in <a href="release-notes.html">release
-              notes</a> — auto-Fable targeting, the fast remediation path,
-              focused-pane tiebreaks, and pane rebind.
+          <section class="msk-mech" aria-labelledby="how-title">
+            <h2 class="ae-h" id="how-title">how it works</h2>
+            <p class="ae-dim msk-mech-copy">
+              One Rust binary reads your Claude transcripts and your live
+              window state on a schedule — no background daemon of its own.
             </p>
           </section>
         </div>

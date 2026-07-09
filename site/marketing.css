@@ -351,32 +351,138 @@
   }
 }
 
-/* ── release notes: benefit-led card stack (locked r2 option 01, counterspell-925) ── */
+/* ── features: benefit hero + headline-only job rows (round 3 option 04
+   lock, counterspell-925) — full-width rows, no fixed-width truncating
+   cell, so nothing ever clips with an ellipsis ── */
 
-.msk-relnotes {
-  display: grid;
-  gap: var(--ae-space-6);
-}
-
-.msk-relcard {
-  border: 1px solid var(--ae-line);
-  padding: var(--ae-space-6);
+.msk-feat-hero {
   display: grid;
   gap: var(--ae-space-3);
+  max-width: 44rem;
 }
 
-.msk-relcard-head {
-  display: flex;
-  align-items: baseline;
-  gap: var(--ae-space-3);
+.msk-feat-kick {
+  margin-bottom: 0;
 }
 
-.msk-relcard h2 {
+.msk-feat-title {
+  font-weight: var(--ae-w-black);
+  color: var(--ae-ink);
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  font-size: clamp(1.6rem, 2.6vw, 2.3rem);
   margin: 0;
 }
 
-.msk-relcard .ae-item {
-  max-width: 42rem;
+.msk-feat-sub {
+  max-width: 38rem;
+}
+
+.msk-job-rows {
+  display: grid;
+}
+
+.msk-job-row {
+  display: grid;
+  grid-template-columns: 11rem 1fr;
+  gap: var(--ae-space-5);
+  padding: var(--ae-space-5) 0;
+  border-top: 1px solid var(--ae-line);
+}
+
+.msk-job-row:last-child {
+  border-bottom: 1px solid var(--ae-line);
+}
+
+.msk-job-k {
+  font-family: var(--ae-font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ae-ink-muted);
+}
+
+.msk-job-v {
+  font-weight: var(--ae-w-medium);
+  color: var(--ae-ink);
+  line-height: 1.55;
+}
+
+.msk-mech {
+  display: grid;
+  gap: var(--ae-space-2);
+}
+
+.msk-mech-copy {
+  max-width: 38rem;
+}
+
+@media (max-width: 780px) {
+  .msk-job-row {
+    grid-template-columns: 1fr;
+    gap: 0.35em;
+    padding: var(--ae-space-4) 0;
+  }
+}
+
+/* ── release notes: dumb-simple version accordion (operator structural
+   redo, counterspell-925; supersedes the card stack shipped in e7e3119) ── */
+
+.msk-accordion {
+  display: grid;
+  gap: var(--ae-space-4);
+}
+
+.msk-acc-entry {
+  border: 1px solid var(--ae-line);
+}
+
+.msk-acc-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ae-space-3);
+  padding: var(--ae-space-5) var(--ae-space-6);
+  cursor: pointer;
+  list-style: none;
+}
+
+.msk-acc-head::-webkit-details-marker {
+  display: none;
+}
+
+.msk-acc-head::marker {
+  display: none;
+}
+
+.msk-acc-ver {
+  font-weight: var(--ae-w-black);
+  color: var(--ae-ink);
+}
+
+.msk-acc-date {
+  font-family: var(--ae-font-mono);
+  font-size: 12px;
+  color: var(--ae-ink-muted);
+}
+
+.msk-acc-chev {
+  margin-left: auto;
+  align-self: center;
+  width: 0.5em;
+  height: 0.5em;
+  border-right: 1.5px solid var(--ae-ink-muted);
+  border-bottom: 1.5px solid var(--ae-ink-muted);
+  transform: rotate(45deg);
+  transition: transform var(--ae-quick) var(--ae-ease);
+}
+
+.msk-acc-entry[open] .msk-acc-chev {
+  transform: rotate(-135deg);
+}
+
+.msk-acc-body {
+  padding: var(--ae-space-5) var(--ae-space-6) var(--ae-space-6);
+  border-top: 1px solid var(--ae-line);
 }
 
 .msk-gh-link {
