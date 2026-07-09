@@ -43,7 +43,7 @@ use std::path::PathBuf;
 pub enum Verdict {
     /// Enabled, watching, and nothing is drifting.
     Shielded,
-    /// A drift is being remediated right now (compact queued / switch pending).
+    /// A drift is being remediated right now (interrupt/compact/switch/continue chain active).
     Acting,
     /// A drift is detected but cannot be safely remediated; reason in words.
     DriftBlocked { reason: String },
@@ -138,7 +138,7 @@ pub struct ActivationEntry {
     pub session: String,
     pub pane: String,
     /// The plain-words line, e.g.
-    /// "daybook w30:p1 drifted fable→opus — compact queued, switching back".
+    /// "daybook w30:p1 drifted fable→opus — remediation started".
     pub text: String,
     /// "confirmed" | "in-flight" | "blocked" | "detected" | "ignored".
     pub outcome: String,
@@ -463,12 +463,9 @@ pub(crate) fn derive_verdict(master_enabled: bool, views: &[SessionView]) -> Ver
     if drifting.is_empty() {
         return Verdict::Shielded;
     }
-    // In-flight remediation wins the headline: a compact is queued / switch
-    // pending on at least one drifted session.
-    if drifting
-        .iter()
-        .any(|view| view.state.contains("compact-pending"))
-    {
+    // In-flight remediation wins the headline: a compact/switch/continue
+    // chain is active on at least one drifted session.
+    if drifting.iter().any(|view| is_in_flight_state(&view.state)) {
         return Verdict::Acting;
     }
     // A drift that cannot be safely acted on (ambiguous pane, no pane, etc.)
@@ -483,10 +480,13 @@ pub(crate) fn derive_verdict(master_enabled: bool, views: &[SessionView]) -> Ver
 }
 
 fn is_blocked_state(state: &str) -> bool {
-    !(state == "idle"
-        || state == "not-open"
-        || state == "live"
-        || state.contains("compact-pending"))
+    !(state == "idle" || state == "not-open" || state == "live" || is_in_flight_state(state))
+}
+
+fn is_in_flight_state(state: &str) -> bool {
+    state.contains("compact-pending")
+        || state.contains("remediation-in-flight")
+        || state.contains("remediation-timed-out")
 }
 
 fn humanize_block(state: &str) -> String {
@@ -498,6 +498,10 @@ fn humanize_block(state: &str) -> String {
         "the session is actively working; waiting for a safe boundary".to_string()
     } else if state == "debounce" {
         "just acted; waiting out the debounce window".to_string()
+    } else if state.starts_with("remediation-in-flight") {
+        "remediation is already in flight".to_string()
+    } else if state.starts_with("remediation-timed-out") {
+        "remediation timed out; retrying from recorded state".to_string()
     } else if state.starts_with("pane-") {
         "the pane is busy (a prompt may be open)".to_string()
     } else {
@@ -509,7 +513,11 @@ fn outcome_of(action: &str, action_taken: &str) -> &'static str {
     match action {
         "remediation_confirmed" => "confirmed",
         "model_switched" => "confirmed",
-        "compact_sent" | "compact_queued" | "interrupt_sent" => "in-flight",
+        "compact_sent"
+        | "compact_queued"
+        | "interrupt_sent"
+        | "continue_sent"
+        | "remediation_recovery" => "in-flight",
         "session_ignored" => "ignored",
         _ => {
             if action_taken == "blocked" {
@@ -541,7 +549,7 @@ pub(crate) fn format_activation(record: &crate::events::ActivationRecord) -> Str
             let tail = match record.action_taken.as_str() {
                 "blocked" => format!("blocked — {}", record.gate),
                 "none" => "no action needed".to_string(),
-                "remediation-started" => "compact queued, switching back".to_string(),
+                "remediation-started" => "remediation started".to_string(),
                 other if other.starts_with("dry-run") => "detected (dry-run)".to_string(),
                 _ => "detected".to_string(),
             };
@@ -550,6 +558,8 @@ pub(crate) fn format_activation(record: &crate::events::ActivationRecord) -> Str
         "compact_queued" => format!("{pane}queued a compact to hand off before switching"),
         "compact_sent" => format!("{pane}sent a compact before switching back to {to}"),
         "interrupt_sent" => format!("{pane}interrupted the drifted turn"),
+        "continue_sent" => format!("{pane}sent continue after switching"),
+        "remediation_recovery" => format!("{pane}recovering timed-out remediation"),
         "model_switched" => format!("{pane}switched back to {to} ✓"),
         "remediation_confirmed" => format!("{pane}back on {to} ✓"),
         "session_ignored" => format!(
@@ -647,10 +657,7 @@ mod tests {
             origin: "downgraded-from-fable".to_string(),
         };
         let text = format_activation(&record);
-        assert_eq!(
-            text,
-            "w30:p1 drifted fable→opus — compact queued, switching back"
-        );
+        assert_eq!(text, "w30:p1 drifted fable→opus — remediation started");
     }
 
     #[test]

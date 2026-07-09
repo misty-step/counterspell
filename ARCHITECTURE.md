@@ -69,15 +69,16 @@ authoritative; cwd matching is only a fallback, excludes panes bound to a
 different session, and any residual multi-pane ambiguity hard-blocks. Focus
 never routes keystrokes.
 
-For a drifted session on an **idle** pane, `counterspell watch` checks three
-unattended gates:
+For a drifted session on a remediable pane, `counterspell watch` checks the
+safe routing gates before it sends text:
 
 - transcript quiet: the transcript has not changed inside the quiet window
-- pane idle: Herdr reports the mapped pane as `idle`
-- debounce: Counterspell has not recently armed remediation for that session
+- pane safe: Herdr reports a single mapped pane as `idle` or `done`, or a
+  `working` pane is bound to the exact session id and can be interrupted
+- chain state: no active remediation chain is already in flight
 
 Plain `counterspell watch` is a dry-run and prints the planned action. It does
-not write debounce state and does not send text to Herdr.
+not write chain state and does not send text to Herdr.
 
 `counterspell watch --arm` executes only plans that pass all gates.
 
@@ -127,40 +128,40 @@ dashboard's `POST /targets/enable` and `POST /targets/disable` routes (and the
 dashboard routes require a same-origin `Origin`/`Referer` (CSRF guard); a
 missing or mismatched origin returns 403 and changes nothing.
 
-## Fast Path: Act While The Downgraded Turn Is Still Running
+## Interrupt Chain
 
 Waiting for idle would let a downgraded session finish its whole turn on the
 wrong model. When drift shows on a **working** pane that is bound to the exact
-session id, the armed watch immediately types the `/compact ...` handoff into
-the pane. Claude Code queues composer input submitted mid-turn and executes it
-the moment the turn ends, so the compact lands at the earliest possible
-boundary. The pass records `pending_compact_unix` and later passes report
-`compact-pending` instead of re-queueing.
+session id, the armed watch sends Escape immediately, then sends the plain
+`/compact ...` handoff. It does not queue a model switch behind the old turn.
 
-Once the pane shows idle with a pending compact behind it, the watch sends the
-bare `/model <target_model>` switch — skipping the second compact and skipping
-the transcript-quiet gate (the recent transcript activity is our own compact).
-A bare `/model` on a large uncompacted context pops a cache-rewind
-confirmation dialog in Claude Code; switching only after a compact is what
-keeps the switch dialog-free. A pending compact expires after 30 minutes, and
-the session falls back to the ordinary idle path.
+Every remediation is tracked by durable per-session `remediation_chain` state
+in `~/.counterspell/sessions.json`: target model, started time, last sent step,
+and when that step was sent. The step sequence is:
 
-The fast path never fires on `blocked` or `unknown` panes (a blocked pane
-usually means a permission prompt is open — injected text would answer it) and
-never on cwd-fallback matches.
+1. `interrupt_sent`
+2. `compact_sent`
+3. `switch_sent`
+4. `continue_sent`
 
-## Compact Then Switch
+The state is written before each Herdr send. Repeated armed passes while a
+chain is in flight render `remediation-in-flight:<step>` and send nothing
+again. A compact only advances to `/model <target_model>` after transcript
+evidence shows a compact summary after the chain started. The switch and
+`continue` command are then sent together, and the chain is not resolved until
+the transcript shows both that compact summary and a post-chain line on the
+target model. Only then is `remediation_chain` cleared and `last_action_unix`
+updated.
 
-The armed action sequence on an idle pane is:
+If a step is stuck past the timeout, the next armed pass reports
+`remediation-timed-out:<step>` and recovers from recorded state: it resumes the
+next unsent step when possible, or restarts the interrupt+compact step with a
+timeout reason recorded in the activation stream. It never re-sends compact
+while a non-timed-out chain is in flight.
 
-1. Send a plain `/compact ...` command to the mapped Herdr pane.
-2. Wait for Herdr to report the pane as `idle`.
-3. Send `/model <target_model>` to the same pane.
-4. Record `last_action_unix` in `~/.counterspell/sessions.json`.
-
-The debounce clock starts at the model switch; a queued fast-path compact is
-tracked by `pending_compact_unix` instead, so the follow-up switch is never
-debounced away.
+The chain never fires on `blocked` panes (a blocked pane usually means a
+permission prompt is open — injected text would answer it). Chain advancement
+and timeout recovery require the pane to be bound by reported session id.
 
 The compaction prompt uses plain framing deliberately. Before moving a session
 back to the target model, Counterspell asks Claude to preserve the current goal,
@@ -170,8 +171,8 @@ to infer a hidden policy from clever wording.
 
 ## Activation Stream
 
-Session-routing telemetry (drift detected, compact queued, model switched,
-remediation confirmed, ignored) is written as JSONL to Counterspell's own
+Session-routing telemetry (drift detected, interrupt/compact/model/continue
+sent, timeout recovery, remediation confirmed, ignored) is written as JSONL to Counterspell's own
 dedicated stream at `~/.counterspell/events.jsonl` (overridable with
 `COUNTERSPELL_EVENTS_PATH`), size-rotated to `events.jsonl.1`. It is
 deliberately NOT written to the shared fleet feed dir (`~/.factory-lanes/feed`)

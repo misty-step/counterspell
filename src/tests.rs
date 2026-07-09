@@ -30,6 +30,7 @@ fn test_session(now: DateTime<Utc>) -> TranscriptSession {
         last_event_at: now - Duration::seconds(60),
         latest_model: Some("claude-opus-4-1".to_string()),
         latest_model_at: Some(now - Duration::seconds(60)),
+        latest_compact_at: None,
         model_history: vec!["claude-fable-5".to_string(), "claude-opus-4-1".to_string()],
     }
 }
@@ -160,6 +161,34 @@ fn transcript_parser_keeps_real_downgrade_before_sentinel() {
 }
 
 #[test]
+fn transcript_parser_records_claude_compact_boundary_evidence() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("session-1.jsonl");
+    let mut file = File::create(&path).expect("create transcript");
+    writeln!(
+        file,
+        r#"{{"type":"assistant","sessionId":"session-1","timestamp":"2026-07-02T12:00:00Z","cwd":"/repo","message":{{"model":"claude-fable-5"}}}}"#
+    )
+    .expect("write fable");
+    writeln!(
+        file,
+        r#"{{"type":"system","subtype":"compact_boundary","timestamp":"2026-07-02T12:01:00Z","sessionId":"session-1","isCompactSummary":true,"compactMetadata":{{"trigger":"manual"}}}}"#
+    )
+    .expect("write compact boundary");
+
+    let session = parse_transcript_file(&path, "project".to_string(), Utc::now()).unwrap();
+
+    assert_eq!(
+        session.latest_compact_at,
+        Some(
+            DateTime::parse_from_rfc3339("2026-07-02T12:01:00Z")
+                .unwrap()
+                .with_timezone(&Utc)
+        )
+    );
+}
+
+#[test]
 fn drift_detection_defensively_ignores_sentinel_latest_model() {
     let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
         .unwrap()
@@ -220,6 +249,7 @@ fn unattended_gate_requires_quiet_transcript_idle_pane_and_debounce() {
         cwd: Some("/repo".to_string()),
         last_action_unix: Some((now - Duration::seconds(60)).timestamp() as u64),
         pending_compact_unix: None,
+        remediation_chain: None,
     };
     assert_eq!(
         gate_decision_for_matches(&quiet_session, &panes, Some(&state), &config, now).blockers,
@@ -228,7 +258,7 @@ fn unattended_gate_requires_quiet_transcript_idle_pane_and_debounce() {
 }
 
 #[test]
-fn drift_plan_sequences_compact_then_switch() {
+fn drift_plan_sends_compact_first() {
     let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
         .unwrap()
         .with_timezone(&Utc);
@@ -239,13 +269,7 @@ fn drift_plan_sequences_compact_then_switch() {
 
     let plan = remediation_plan(&session, &panes, None, &config, now);
 
-    assert_eq!(
-        plan.actions,
-        vec![
-            PlannedAction::Compact,
-            PlannedAction::SwitchModel("claude-fable-5".to_string())
-        ]
-    );
+    assert_eq!(plan.actions, vec![PlannedAction::Compact]);
 }
 
 #[test]
@@ -298,11 +322,29 @@ fn fast_path_state(now: DateTime<Utc>, pending_secs_ago: i64) -> SessionState {
         cwd: Some("/repo".to_string()),
         last_action_unix: None,
         pending_compact_unix: Some((now - Duration::seconds(pending_secs_ago)).timestamp() as u64),
+        remediation_chain: None,
+    }
+}
+
+fn chain_state(now: DateTime<Utc>, step: RemediationStep, step_secs_ago: i64) -> SessionState {
+    let sent = (now - Duration::seconds(step_secs_ago)).timestamp() as u64;
+    SessionState {
+        session_id: "session-1".to_string(),
+        cwd: Some("/repo".to_string()),
+        last_action_unix: None,
+        pending_compact_unix: None,
+        remediation_chain: Some(RemediationChainState {
+            target_model: "claude-fable-5".to_string(),
+            started_unix: sent,
+            step_sent_unix: sent,
+            step,
+            recovery_reason: None,
+        }),
     }
 }
 
 #[test]
-fn drift_on_working_session_bound_pane_interrupts_and_remediates_in_one_pass() {
+fn drift_on_working_session_bound_pane_interrupts_and_sends_compact_immediately() {
     let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
         .unwrap()
         .with_timezone(&Utc);
@@ -318,22 +360,169 @@ fn drift_on_working_session_bound_pane_interrupts_and_remediates_in_one_pass() {
     let plan = remediation_plan(&session, &panes, None, &config, now);
 
     assert!(plan.gate.is_allowed());
-    // The whole chain fires in one pass: the switch must never depend on a
-    // later tick happening to sample the pane idle (that lost the
-    // 2026-07-04 switch on a busy session). The compact is QUEUED, not
-    // waited on — the switch typed behind it executes post-compact FIFO.
+    assert_eq!(
+        plan.actions,
+        vec![PlannedAction::Interrupt, PlannedAction::Compact]
+    );
+}
+
+#[test]
+fn compact_sent_chain_blocks_reentry_until_summary_evidence() {
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let config = test_config();
+    let session = test_session(now);
+    let mut pane = idle_pane();
+    pane.agent_status = Some("working".to_string());
+    pane.agent_session = bound_session("session-1");
+    let panes = [&pane];
+    let state = chain_state(now, RemediationStep::Compact, 60);
+
+    let plan = remediation_plan(&session, &panes, Some(&state), &config, now);
+
+    assert_eq!(
+        plan.gate.blockers,
+        vec![GateBlocker::RemediationInFlight(RemediationStep::Compact)]
+    );
+    assert!(plan.actions.is_empty());
+}
+
+#[test]
+fn compact_sent_chain_advances_to_switch_and_continue_after_summary_evidence() {
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let config = test_config();
+    let mut session = test_session(now);
+    session.latest_compact_at = Some(now - Duration::seconds(30));
+    let mut pane = idle_pane();
+    pane.agent_session = bound_session("session-1");
+    let panes = [&pane];
+    let state = chain_state(now, RemediationStep::Compact, 60);
+
+    let plan = remediation_plan(&session, &panes, Some(&state), &config, now);
+
+    assert!(plan.gate.is_allowed());
     assert_eq!(
         plan.actions,
         vec![
-            PlannedAction::Interrupt,
-            PlannedAction::QueueCompact,
-            PlannedAction::SwitchModel("claude-fable-5".to_string())
+            PlannedAction::SwitchModel("claude-fable-5".to_string()),
+            PlannedAction::Continue
         ]
     );
 }
 
 #[test]
-fn working_pane_with_pending_compact_blocks_requeue() {
+fn compact_sent_chain_does_not_complete_before_continue_even_if_fable_is_visible() {
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let config = test_config();
+    let mut session = test_session(now);
+    session.latest_compact_at = Some(now - Duration::seconds(30));
+    session.latest_model = Some("claude-fable-5".to_string());
+    session.latest_model_at = Some(now - Duration::seconds(20));
+    let mut pane = idle_pane();
+    pane.agent_session = bound_session("session-1");
+    let panes = [&pane];
+    let state = chain_state(now, RemediationStep::Compact, 60);
+
+    let plan = remediation_plan(&session, &panes, Some(&state), &config, now);
+
+    assert_eq!(
+        plan.actions,
+        vec![
+            PlannedAction::SwitchModel("claude-fable-5".to_string()),
+            PlannedAction::Continue
+        ]
+    );
+}
+
+#[test]
+fn switch_sent_chain_resumes_with_continue() {
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let config = test_config();
+    let session = test_session(now);
+    let mut pane = idle_pane();
+    pane.agent_session = bound_session("session-1");
+    let panes = [&pane];
+    let state = chain_state(now, RemediationStep::Switch, 60);
+
+    let plan = remediation_plan(&session, &panes, Some(&state), &config, now);
+
+    assert!(plan.gate.is_allowed());
+    assert_eq!(plan.actions, vec![PlannedAction::Continue]);
+}
+
+#[test]
+fn continue_sent_chain_waits_for_compact_and_fable_evidence() {
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let config = test_config();
+    let session = test_session(now);
+    let mut pane = idle_pane();
+    pane.agent_session = bound_session("session-1");
+    let panes = [&pane];
+    let state = chain_state(now, RemediationStep::Continue, 60);
+
+    let plan = remediation_plan(&session, &panes, Some(&state), &config, now);
+
+    assert_eq!(
+        plan.gate.blockers,
+        vec![GateBlocker::RemediationInFlight(RemediationStep::Continue)]
+    );
+    assert!(plan.actions.is_empty());
+}
+
+#[test]
+fn chain_completion_requires_compact_summary_and_post_chain_fable() {
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let mut session = test_session(now);
+    let state = chain_state(now, RemediationStep::Continue, 60);
+    let chain = state.remediation_chain.as_ref().expect("chain");
+
+    assert!(!chain_has_completion_evidence(&session, chain));
+
+    session.latest_compact_at = Some(now - Duration::seconds(30));
+    assert!(!chain_has_completion_evidence(&session, chain));
+
+    session.latest_model = Some("claude-fable-5".to_string());
+    session.latest_model_at = Some(now - Duration::seconds(20));
+    assert!(chain_has_completion_evidence(&session, chain));
+}
+
+#[test]
+fn timed_out_compact_without_summary_restarts_with_reason_not_while_in_flight() {
+    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let config = test_config();
+    let session = test_session(now);
+    let mut pane = idle_pane();
+    pane.agent_session = bound_session("session-1");
+    let panes = [&pane];
+    let state = chain_state(now, RemediationStep::Compact, 3600);
+
+    let plan = remediation_plan(&session, &panes, Some(&state), &config, now);
+
+    assert_eq!(
+        plan.actions,
+        vec![PlannedAction::Interrupt, PlannedAction::Compact]
+    );
+    assert_eq!(
+        plan.recovery_reason.as_deref(),
+        Some("timeout:compact-sent")
+    );
+}
+
+#[test]
+fn legacy_pending_compact_still_blocks_requeue_before_timeout() {
     let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
         .unwrap()
         .with_timezone(&Utc);
@@ -347,83 +536,11 @@ fn working_pane_with_pending_compact_blocks_requeue() {
 
     let plan = remediation_plan(&session, &panes, Some(&state), &config, now);
 
-    assert_eq!(plan.gate.blockers, vec![GateBlocker::CompactPending]);
-    assert!(plan.actions.is_empty());
-}
-
-#[test]
-fn idle_pane_with_pending_compact_never_bare_switches() {
-    // A pending marker does NOT prove the compact ran (the chain may have
-    // crashed before typing it). A bare /model on a large context pops the
-    // cache-rewind dialog and wedges the pane — so an idle pane with a
-    // pending marker must fall through to the ordinary gate, not shortcut
-    // to a lone switch.
-    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
-        .unwrap()
-        .with_timezone(&Utc);
-    let config = test_config();
-    let mut session = test_session(now);
-    session.last_event_at = now - Duration::seconds(3);
-    let mut pane = idle_pane();
-    pane.agent_session = bound_session("session-1");
-    let panes = [&pane];
-    let state = fast_path_state(now, 90);
-
-    let plan = remediation_plan(&session, &panes, Some(&state), &config, now);
-
-    assert_eq!(plan.gate.blockers, vec![GateBlocker::TranscriptActive]);
-    assert!(plan.actions.is_empty());
-}
-
-#[test]
-fn idle_pane_with_pending_compact_recovers_via_full_compact_then_switch() {
-    // Crash recovery: once the transcript is quiet, the ordinary idle path
-    // re-runs the full compact-then-switch pair. Re-compacting an already
-    // compacted (tiny) context is cheap; bare-switching an uncompacted one
-    // is not safe. The marker never shortcuts the sequence.
-    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
-        .unwrap()
-        .with_timezone(&Utc);
-    let config = test_config();
-    let session = test_session(now);
-    let mut pane = idle_pane();
-    pane.agent_session = bound_session("session-1");
-    let panes = [&pane];
-    let state = fast_path_state(now, 90);
-
-    let plan = remediation_plan(&session, &panes, Some(&state), &config, now);
-
-    assert!(plan.gate.is_allowed());
     assert_eq!(
-        plan.actions,
-        vec![
-            PlannedAction::Compact,
-            PlannedAction::SwitchModel("claude-fable-5".to_string())
-        ]
+        plan.gate.blockers,
+        vec![GateBlocker::RemediationInFlight(RemediationStep::Compact)]
     );
-}
-
-#[test]
-fn expired_pending_compact_falls_back_to_full_remediation() {
-    let now = DateTime::parse_from_rfc3339("2026-07-02T12:10:00Z")
-        .unwrap()
-        .with_timezone(&Utc);
-    let config = test_config();
-    let session = test_session(now);
-    let mut pane = idle_pane();
-    pane.agent_session = bound_session("session-1");
-    let panes = [&pane];
-    let state = fast_path_state(now, 3600);
-
-    let plan = remediation_plan(&session, &panes, Some(&state), &config, now);
-
-    assert_eq!(
-        plan.actions,
-        vec![
-            PlannedAction::Compact,
-            PlannedAction::SwitchModel("claude-fable-5".to_string())
-        ]
-    );
+    assert!(plan.actions.is_empty());
 }
 
 #[test]
@@ -485,6 +602,7 @@ fn debounced_working_pane_does_not_queue_compact() {
         cwd: Some("/repo".to_string()),
         last_action_unix: Some((now - Duration::seconds(60)).timestamp() as u64),
         pending_compact_unix: None,
+        remediation_chain: None,
     };
 
     let plan = remediation_plan(&session, &panes, Some(&state), &config, now);
@@ -631,13 +749,7 @@ fn fable_history_is_auto_targeted_without_config() {
     let plan = remediation_plan(&session, &panes, None, &config, now);
 
     assert!(detect_drift(&session, "claude-fable-5").is_some());
-    assert_eq!(
-        plan.actions,
-        vec![
-            PlannedAction::Compact,
-            PlannedAction::SwitchModel("claude-fable-5".to_string())
-        ]
-    );
+    assert_eq!(plan.actions, vec![PlannedAction::Compact]);
     assert_eq!(
         format_target_match(&target_for_session(&session, &config).expect("auto target")),
         "claude-fable-5 (auto:fable)"
@@ -961,13 +1073,7 @@ fn done_pane_is_remediable_like_idle() {
     assert!(gate_decision_for_matches(&session, &panes, None, &config, now).is_allowed());
 
     let plan = remediation_plan(&session, &panes, None, &config, now);
-    assert_eq!(
-        plan.actions,
-        vec![
-            PlannedAction::Compact,
-            PlannedAction::SwitchModel("claude-fable-5".to_string()),
-        ]
-    );
+    assert_eq!(plan.actions, vec![PlannedAction::Compact]);
 }
 
 #[test]

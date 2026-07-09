@@ -2,13 +2,13 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 
 use crate::defaults::{
-    COMPACT_COMMAND, COMPACT_WAIT_TIMEOUT_MS, DEFAULT_TARGET_MODEL, HERDR_WAIT_MARGIN_MS,
-    INTERRUPT_WAIT_TIMEOUT_MS, MODEL_SWITCH_CONFIRM_DELAY_MS, PENDING_COMPACT_EXPIRY_SECONDS,
+    COMPACT_COMMAND, CONTINUE_COMMAND, DEFAULT_TARGET_MODEL, HERDR_WAIT_MARGIN_MS,
+    INTERRUPT_WAIT_TIMEOUT_MS, MODEL_SWITCH_CONFIRM_DELAY_MS, REMEDIATION_CHAIN_TIMEOUT_SECONDS,
 };
 use crate::herdr::{pane_session_id, run_herdr_args, run_herdr_args_with_timeout, HerdrPane};
 use crate::model::{
-    Config, GateBlocker, GateDecision, ModelDrift, PlannedAction, RemediationPlan, SessionState,
-    TargetMatch, TranscriptSession,
+    Config, GateBlocker, GateDecision, ModelDrift, PlannedAction, RemediationChainState,
+    RemediationPlan, RemediationStep, SessionState, TargetMatch, TranscriptSession,
 };
 use crate::sessions::is_model_sentinel;
 use crate::util::unix_to_utc;
@@ -21,26 +21,15 @@ pub(crate) fn execute_remediation(pane_id: &str, actions: &[PlannedAction]) -> R
             PlannedAction::Compact => {
                 run_herdr_args(&["pane", "run", pane_id, COMPACT_COMMAND])
                     .with_context(|| format!("send compact command to Herdr pane {pane_id}"))?;
-                // Best-effort pacing: poll until the pane is no longer
-                // `working` instead of `herdr wait --status idle`. Managed
-                // panes (`herdr agent start`) settle to `done`, a status the
-                // wait command cannot express, so the old wait burned its
-                // full timeout (measured live: 184s remediation latency,
-                // 180s of it this wait). Failure or timeout never aborts the
-                // chain — the /model typed next queues FIFO post-compact and
-                // lands dialog-free.
-                wait_while_pane_working(pane_id, COMPACT_WAIT_TIMEOUT_MS);
             }
             PlannedAction::Interrupt => {
                 // Escape ends the current turn (interrupt, not kill).
                 run_herdr_args(&["pane", "send-keys", pane_id, "escape"])
                     .with_context(|| format!("send escape to Herdr pane {pane_id}"))?;
-                // Best-effort pause so the queued compact executes right
-                // away instead of at the end of a resumed turn. IGNORED on
-                // failure: herdr's agent-status lags interrupts, and the
-                // rest of the chain is queue-safe regardless — aborting
-                // here is what left a session downgraded behind a stuck
-                // in-flight marker on 2026-07-04.
+                // Best-effort pause so the compact executes immediately
+                // after interruption. IGNORED on failure: the durable chain
+                // state blocks duplicate compacts while Herdr status catches
+                // up or until an explicit timeout recovery path takes over.
                 let _ = run_herdr_args_with_timeout(
                     &[
                         "wait",
@@ -54,12 +43,6 @@ pub(crate) fn execute_remediation(pane_id: &str, actions: &[PlannedAction]) -> R
                     wait_subprocess_timeout(INTERRUPT_WAIT_TIMEOUT_MS),
                 );
             }
-            PlannedAction::QueueCompact => {
-                // No wait afterward, by design: the switch typed behind
-                // this queues FIFO and executes post-compact.
-                run_herdr_args(&["pane", "run", pane_id, COMPACT_COMMAND])
-                    .with_context(|| format!("queue compact command into Herdr pane {pane_id}"))?;
-            }
             PlannedAction::SwitchModel(model) => {
                 let command = format!("/model {model}");
                 run_herdr_args(&["pane", "run", pane_id, command.as_str()])
@@ -71,6 +54,10 @@ pub(crate) fn execute_remediation(pane_id: &str, actions: &[PlannedAction]) -> R
                 run_herdr_args(&["pane", "send-keys", pane_id, "enter"])
                     .with_context(|| format!("confirm model switch in Herdr pane {pane_id}"))?;
             }
+            PlannedAction::Continue => {
+                run_herdr_args(&["pane", "run", pane_id, CONTINUE_COMMAND])
+                    .with_context(|| format!("send continue command to Herdr pane {pane_id}"))?;
+            }
         }
     }
 
@@ -79,32 +66,6 @@ pub(crate) fn execute_remediation(pane_id: &str, actions: &[PlannedAction]) -> R
 
 fn wait_subprocess_timeout(wait_ms: u64) -> std::time::Duration {
     std::time::Duration::from_millis(wait_ms + HERDR_WAIT_MARGIN_MS)
-}
-
-/// Best-effort: block until the pane's agent is no longer `working`, or the
-/// timeout elapses. Status-set agnostic on the settled side (idle, done,
-/// blocked, unknown, pane gone all end the wait) so managed panes that never
-/// report `idle` don't burn the full timeout. Sampling errors end the wait
-/// too — the remediation chain is FIFO-queue-safe without pacing.
-fn wait_while_pane_working(pane_id: &str, timeout_ms: u64) {
-    let poll = std::time::Duration::from_millis(2_000);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
-    // Give herdr a beat to notice the compact turn starting before sampling,
-    // otherwise the pre-compact settled status reads as already-finished.
-    std::thread::sleep(poll);
-    while std::time::Instant::now() < deadline {
-        let Ok(panes) = crate::herdr::load_herdr_panes() else {
-            return;
-        };
-        let working = panes.iter().any(|pane| {
-            crate::herdr::pane_id(pane) == pane_id
-                && pane.agent_status.as_deref() == Some("working")
-        });
-        if !working {
-            return;
-        }
-        std::thread::sleep(poll);
-    }
 }
 
 fn model_switch_confirm_delay() -> std::time::Duration {
@@ -127,56 +88,86 @@ pub(crate) fn remediation_plan(
         .as_ref()
         .and_then(|target| detect_actionable_drift(session, &target.target_model, state));
 
-    // Fast path: a downgraded session must not keep working on the wrong
-    // model, and remediation must not depend on ever SAMPLING the pane idle
-    // — a busy lead session with queued teammate messages is never
-    // observably idle, which is exactly how the 2026-07-04 switch was lost
-    // (compact fired, every subsequent tick sampled `working`, /model never
-    // went out). Instead the whole chain runs synchronously in one pass:
-    // Escape ends the current turn, /compact runs on the confirmed-idle
-    // pane, and /model goes out right behind it — if a queued message
-    // steals the pane first, both inputs queue FIFO and execute in order,
-    // /model landing dialog-free on the small post-compact context. All of
-    // it requires the pane to be bound to this exact session id — never a
-    // cwd guess.
-    if let (Some(target), Some(_)) = (&target, &drift) {
-        if let [pane] = matching_panes {
-            if pane_session_id(pane) == Some(session.session_id.as_str())
-                && pane.agent_status.as_deref() == Some("working")
-            {
-                if has_pending_compact(state, now) {
-                    // A chain is (or may be) already in flight — persisted
-                    // before it started typing. Never double-Escape.
-                    return RemediationPlan {
-                        gate: GateDecision {
-                            blockers: vec![GateBlocker::CompactPending],
-                        },
-                        actions: Vec::new(),
-                    };
-                }
-                if !is_debounced(state, config, now) {
-                    return RemediationPlan {
-                        gate: GateDecision {
-                            blockers: Vec::new(),
-                        },
-                        actions: vec![
-                            PlannedAction::Interrupt,
-                            PlannedAction::QueueCompact,
-                            PlannedAction::SwitchModel(target.target_model.clone()),
-                        ],
-                    };
-                }
+    if let Some(target) = &target {
+        if let Some(chain) = active_chain(state, &target.target_model) {
+            if chain_has_completion_evidence(session, &chain) {
+                return RemediationPlan {
+                    gate: GateDecision {
+                        blockers: Vec::new(),
+                    },
+                    actions: Vec::new(),
+                    recovery_reason: None,
+                };
             }
+
+            if let Some(actions) = next_actions_for_chain_progress(session, &chain) {
+                let gate = chain_recovery_gate(session, matching_panes);
+                return RemediationPlan {
+                    actions: if gate.is_allowed() {
+                        actions
+                    } else {
+                        Vec::new()
+                    },
+                    gate,
+                    recovery_reason: None,
+                };
+            }
+
+            if !chain_timed_out(&chain, now) {
+                return RemediationPlan {
+                    gate: GateDecision {
+                        blockers: vec![GateBlocker::RemediationInFlight(chain.step)],
+                    },
+                    actions: Vec::new(),
+                    recovery_reason: None,
+                };
+            }
+
+            let gate = chain_recovery_gate(session, matching_panes);
+            if !gate.is_allowed() {
+                return RemediationPlan {
+                    gate: GateDecision {
+                        blockers: gate
+                            .blockers
+                            .into_iter()
+                            .chain(std::iter::once(GateBlocker::RemediationTimedOut(
+                                chain.step,
+                            )))
+                            .collect(),
+                    },
+                    actions: Vec::new(),
+                    recovery_reason: Some(format!("timeout:{}", chain.step.label())),
+                };
+            }
+
+            let actions = recovery_actions(session, &chain);
+            return RemediationPlan {
+                gate,
+                actions,
+                recovery_reason: Some(format!("timeout:{}", chain.step.label())),
+            };
         }
     }
 
-    let gate = gate_decision_for_matches(session, matching_panes, state, config, now);
-    let actions = if let Some(target) = target {
-        if drift.is_some() && gate.is_allowed() {
-            vec![
-                PlannedAction::Compact,
-                PlannedAction::SwitchModel(target.target_model),
-            ]
+    let mut gate = gate_decision_for_matches(session, matching_panes, state, config, now);
+    let actions = if target.is_some() {
+        if drift.is_some() {
+            let working_bound = matching_panes.first().is_some_and(|pane| {
+                matching_panes.len() == 1
+                    && pane_session_id(pane) == Some(session.session_id.as_str())
+                    && pane.agent_status.as_deref() == Some("working")
+                    && !is_debounced(state, config, now)
+            });
+            if working_bound {
+                gate = GateDecision {
+                    blockers: Vec::new(),
+                };
+                vec![PlannedAction::Interrupt, PlannedAction::Compact]
+            } else if gate.is_allowed() {
+                vec![PlannedAction::Compact]
+            } else {
+                Vec::new()
+            }
         } else {
             Vec::new()
         }
@@ -184,16 +175,125 @@ pub(crate) fn remediation_plan(
         Vec::new()
     };
 
-    RemediationPlan { gate, actions }
+    RemediationPlan {
+        gate,
+        actions,
+        recovery_reason: None,
+    }
 }
 
-fn has_pending_compact(state: Option<&SessionState>, now: DateTime<Utc>) -> bool {
+fn active_chain(state: Option<&SessionState>, target_model: &str) -> Option<RemediationChainState> {
+    let state = state?;
+    if let Some(chain) = &state.remediation_chain {
+        return Some(chain.clone());
+    }
     state
-        .and_then(|state| state.pending_compact_unix)
-        .and_then(unix_to_utc)
-        .is_some_and(|queued_at| {
-            now - queued_at < Duration::seconds(PENDING_COMPACT_EXPIRY_SECONDS as i64)
+        .pending_compact_unix
+        .map(|queued_at| RemediationChainState {
+            target_model: target_model.to_string(),
+            started_unix: queued_at,
+            step_sent_unix: queued_at,
+            step: RemediationStep::Compact,
+            recovery_reason: Some("legacy-pending-compact".to_string()),
         })
+}
+
+pub(crate) fn chain_has_completion_evidence(
+    session: &TranscriptSession,
+    chain: &RemediationChainState,
+) -> bool {
+    chain.step == RemediationStep::Continue
+        && compact_summary_after_chain_start(session, chain)
+        && target_model_after_chain_start(session, &chain.target_model, chain)
+}
+
+pub(crate) fn compact_summary_after_chain_start(
+    session: &TranscriptSession,
+    chain: &RemediationChainState,
+) -> bool {
+    session
+        .latest_compact_at
+        .and_then(|at| unix_to_utc(chain.started_unix).map(|started| at >= started))
+        .unwrap_or(false)
+}
+
+fn target_model_after_chain_start(
+    session: &TranscriptSession,
+    target_model: &str,
+    chain: &RemediationChainState,
+) -> bool {
+    session.latest_model.as_deref() == Some(target_model)
+        && session
+            .latest_model_at
+            .and_then(|at| unix_to_utc(chain.started_unix).map(|started| at >= started))
+            .unwrap_or(false)
+}
+
+fn chain_timed_out(chain: &RemediationChainState, now: DateTime<Utc>) -> bool {
+    unix_to_utc(chain.step_sent_unix)
+        .is_some_and(|sent_at| now - sent_at >= Duration::seconds(chain_timeout_seconds() as i64))
+}
+
+pub(crate) fn chain_timeout_seconds() -> u64 {
+    std::env::var("COUNTERSPELL_REMEDIATION_CHAIN_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(REMEDIATION_CHAIN_TIMEOUT_SECONDS)
+}
+
+fn chain_recovery_gate(session: &TranscriptSession, matching_panes: &[&HerdrPane]) -> GateDecision {
+    let mut blockers = Vec::new();
+    match matching_panes {
+        [] => blockers.push(GateBlocker::NoPane),
+        [pane] if pane_session_id(pane) == Some(session.session_id.as_str()) => {
+            if pane.agent_status.as_deref() == Some("blocked") {
+                blockers.push(GateBlocker::PaneBusy("blocked".to_string()));
+            }
+        }
+        [pane] => blockers.push(GateBlocker::PaneBusy(
+            pane.agent_status
+                .clone()
+                .unwrap_or_else(|| "unbound".to_string()),
+        )),
+        panes => blockers.push(GateBlocker::AmbiguousPane(panes.len())),
+    }
+    GateDecision { blockers }
+}
+
+fn recovery_actions(
+    session: &TranscriptSession,
+    chain: &RemediationChainState,
+) -> Vec<PlannedAction> {
+    if compact_summary_after_chain_start(session, chain) {
+        return vec![
+            PlannedAction::SwitchModel(chain.target_model.clone()),
+            PlannedAction::Continue,
+        ];
+    }
+
+    match chain.step {
+        RemediationStep::Interrupt => vec![PlannedAction::Compact],
+        RemediationStep::Compact | RemediationStep::Switch | RemediationStep::Continue => {
+            vec![PlannedAction::Interrupt, PlannedAction::Compact]
+        }
+    }
+}
+
+fn next_actions_for_chain_progress(
+    session: &TranscriptSession,
+    chain: &RemediationChainState,
+) -> Option<Vec<PlannedAction>> {
+    match chain.step {
+        RemediationStep::Interrupt => Some(vec![PlannedAction::Compact]),
+        RemediationStep::Compact => compact_summary_after_chain_start(session, chain).then(|| {
+            vec![
+                PlannedAction::SwitchModel(chain.target_model.clone()),
+                PlannedAction::Continue,
+            ]
+        }),
+        RemediationStep::Switch => Some(vec![PlannedAction::Continue]),
+        RemediationStep::Continue => None,
+    }
 }
 
 fn is_debounced(state: Option<&SessionState>, config: &Config, now: DateTime<Utc>) -> bool {
@@ -349,6 +449,29 @@ pub(crate) fn gate_decision_for_matches(
 ) -> GateDecision {
     let mut blockers = Vec::new();
 
+    if let Some(chain) = state.and_then(|state| state.remediation_chain.as_ref()) {
+        if chain_has_completion_evidence(session, chain) {
+            return GateDecision { blockers };
+        }
+        if chain_timed_out(chain, now) {
+            blockers.push(GateBlocker::RemediationTimedOut(chain.step));
+        } else {
+            blockers.push(GateBlocker::RemediationInFlight(chain.step));
+        }
+        return GateDecision { blockers };
+    }
+
+    if state
+        .and_then(|state| state.pending_compact_unix)
+        .and_then(unix_to_utc)
+        .is_some_and(|queued_at| {
+            now - queued_at < Duration::seconds(chain_timeout_seconds() as i64)
+        })
+    {
+        blockers.push(GateBlocker::CompactPending);
+        return GateDecision { blockers };
+    }
+
     if now - session.last_event_at < Duration::seconds(config.transcript_quiet_seconds as i64) {
         blockers.push(GateBlocker::TranscriptActive);
     }
@@ -402,6 +525,12 @@ pub(crate) fn describe_gate(gate: &GateDecision) -> String {
             GateBlocker::PaneBusy(state) => format!("pane-{state}"),
             GateBlocker::Debounce => "debounce".to_string(),
             GateBlocker::CompactPending => "compact-pending".to_string(),
+            GateBlocker::RemediationInFlight(step) => {
+                format!("remediation-in-flight:{}", step.label())
+            }
+            GateBlocker::RemediationTimedOut(step) => {
+                format!("remediation-timed-out:{}", step.label())
+            }
         })
         .collect::<Vec<_>>()
         .join(",")
@@ -417,8 +546,8 @@ pub(crate) fn describe_actions(actions: &[PlannedAction]) -> String {
         .map(|action| match action {
             PlannedAction::Compact => "compact".to_string(),
             PlannedAction::Interrupt => "interrupt".to_string(),
-            PlannedAction::QueueCompact => "queue-compact".to_string(),
             PlannedAction::SwitchModel(model) => format!("switch:{model}"),
+            PlannedAction::Continue => "continue".to_string(),
         })
         .collect::<Vec<_>>()
         .join(" then ")
