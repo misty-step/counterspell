@@ -33,6 +33,15 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # Short-lived installation token from the org's misty-step-releaser
+      # GitHub App, replacing the decommissioned GH_RELEASE_TOKEN bot PAT.
+      - name: Mint release token
+        id: release-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.LANDMARK_RELEASER_APP_ID }}
+          private-key: ${{ secrets.LANDMARK_RELEASER_PRIVATE_KEY }}
+
       # Landmark: version decision, changelog, GitHub Release, synthesized
       # user-facing notes. Pre-stable (0.x) line pinned per operator ruling;
       # .releaserc.json (branches: main, pre-stable release rules) is the
@@ -40,7 +49,8 @@ jobs:
       # default and its release-commit message intentionally omits
       # "[skip ci]" -- that string would also suppress the push:tags:v*
       # trigger that builds release binaries (GitHub applies skip-ci to any
-      # push event, tag pushes included).
+      # push event, tag pushes included). App installation tokens (unlike
+      # GITHUB_TOKEN) do trigger that downstream workflow.
       # https://github.com/misty-step/landmark
       - name: Run Landmark
         id: landmark
@@ -48,7 +58,7 @@ jobs:
         with:
           mode: full
           stability: pre-stable
-          github-token: ${{ secrets.GH_RELEASE_TOKEN }}
+          github-token: ${{ steps.release-token.outputs.token }}
           llm-api-key: ${{ secrets.OPENROUTER_API_KEY }}
           node-version: "24"
           synthesis: "true"
