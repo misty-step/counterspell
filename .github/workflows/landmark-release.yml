@@ -1,0 +1,79 @@
+name: Landmark Release
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: landmark-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # cargo generate-lockfile in .releaserc.json's exec plugin needs cargo
+      # on PATH inside the same job that runs semantic-release.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Landmark: version decision, changelog, GitHub Release, synthesized
+      # user-facing notes. Pre-stable (0.x) line pinned per operator ruling;
+      # .releaserc.json (branches: main, pre-stable release rules) is the
+      # repo's own semantic-release config, so it wins over the bundled
+      # default and its release-commit message intentionally omits
+      # "[skip ci]" -- that string would also suppress the push:tags:v*
+      # trigger that builds release binaries (GitHub applies skip-ci to any
+      # push event, tag pushes included).
+      # https://github.com/misty-step/landmark
+      - name: Run Landmark
+        id: landmark
+        uses: misty-step/landmark@v1
+        with:
+          mode: full
+          stability: pre-stable
+          github-token: ${{ secrets.GH_RELEASE_TOKEN }}
+          llm-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          node-version: "24"
+          synthesis: "true"
+          synthesis-required: "false"
+          healthcheck: "true"
+
+      - name: Sync release notes accordion
+        if: steps.landmark.outputs.released == 'true'
+        run: |
+          set -euo pipefail
+          python3 scripts/sync-release-accordion.py \
+            --releases-json docs/releases/releases.json \
+            --tag "${{ steps.landmark.outputs.release-tag }}" \
+            --site-file site/release-notes.html
+
+      - name: Commit release notes accordion
+        if: steps.landmark.outputs.released == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add site/release-notes.html docs/releases
+          if git diff --cached --quiet; then
+            echo "No accordion changes to commit."
+          else
+            git commit -m "docs(site): sync release notes accordion for ${{ steps.landmark.outputs.release-tag }} [skip ci]"
+            git push origin HEAD:main
+          fi

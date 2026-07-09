@@ -1,0 +1,15 @@
+product:
+  name: Counterspell
+  description: Keeps Claude Code sessions pinned to the model you chose, mid-turn, with a native desktop rail and one-command reattach.
+audience: end-user
+voice: Plain and concrete. Describe what each release lets you do, not what changed internally. No slop, no anthropomorphized taglines.
+changelog:
+  source: auto
+artifacts:
+  markdown: docs/releases/{version}.md
+  html: docs/releases/{version}.html
+  json: docs/releases/releases.json
+release:
+  profile: full
+model:
+  policy: balanced
