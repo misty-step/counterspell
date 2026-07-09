@@ -2,6 +2,9 @@
 :root {
   --ae-accent: #2643d0;
   --ae-accent-dark: #8c9eff;
+  /* the kit ships regular/medium/black weights only; the locked hero says
+     bold — define it so .msk-hero-title stops falling through to UA defaults */
+  --ae-w-bold: 700;
 }
 
 .msk-bar,
